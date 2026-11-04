@@ -1,0 +1,1 @@
+ALTER TABLE "user" ADD COLUMN "save_receipt_photos_default" boolean DEFAULT false NOT NULL;

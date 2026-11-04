@@ -15,6 +15,7 @@ interface ReceiptScannerProps {
   categories: Category[];
   wallets: Wallet[];
   userCurrency: string;
+  saveReceiptPhotosDefault?: boolean;
 }
 
 interface ExtractedData {
@@ -37,6 +38,7 @@ export function ReceiptScanner({
   categories: initialCategories,
   wallets,
   userCurrency,
+  saveReceiptPhotosDefault = false,
 }: ReceiptScannerProps) {
   const router = useRouter();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -46,7 +48,6 @@ export function ReceiptScanner({
   const [step, setStep] = React.useState<"idle" | "uploading" | "review">("idle");
   const [imagePreviewUrl, setImagePreviewUrl] = React.useState<string | null>(null);
   const [currentFile, setCurrentFile] = React.useState<File | null>(null);
-  const [receiptId, setReceiptId] = React.useState<string | null>(null);
   const [extracted, setExtracted] = React.useState<ExtractedData | null>(null);
   const [statusNotice, setStatusNotice] = React.useState<string | null>(null);
   const [allModelsFailed, setAllModelsFailed] = React.useState(false);
@@ -62,6 +63,7 @@ export function ReceiptScanner({
   const [categoryId, setCategoryId] = React.useState("");
   const [walletId, setWalletId] = React.useState("");
   const [notes, setNotes] = React.useState("");
+  const [saveReceiptPhoto, setSaveReceiptPhoto] = React.useState(saveReceiptPhotosDefault);
   const [saving, setSaving] = React.useState(false);
 
   // Inline category suggestion & creation
@@ -171,6 +173,7 @@ export function ReceiptScanner({
     setStatusNotice(null);
     setAllModelsFailed(false);
     setCurrentFile(file);
+    setSaveReceiptPhoto(saveReceiptPhotosDefault);
     setStep("uploading");
 
     const previewUrl = URL.createObjectURL(file);
@@ -188,19 +191,13 @@ export function ReceiptScanner({
 
       const data = await res.json();
 
-      // If client is unauthorized (401) or bad request (400)
       if (res.status === 401 || res.status === 400) {
         setError(data.error || "Request failed");
         setStep("idle");
         return;
       }
 
-      if (data.receiptId) {
-        setReceiptId(data.receiptId);
-      }
-
       if (data.allModelsFailed || !data.success) {
-        // Requirement 4: Show "Scanning is busy right now. Enter it manually or try again" and open manual form with photo attached
         setAllModelsFailed(true);
         setStatusNotice("Scanning is busy right now. Enter it manually or try again");
         initializeDefaults();
@@ -218,7 +215,6 @@ export function ReceiptScanner({
       setCurrency(ext.currency || userCurrency);
       setDateStr(ext.date || new Date().toISOString().split("T")[0]);
 
-      // Resolve category match against user custom and shared categories
       resolveCategoryMatch(ext.category_suggestion);
 
       if (defaultWallet) {
@@ -231,7 +227,6 @@ export function ReceiptScanner({
 
       setStep("review");
     } catch (err: unknown) {
-      // Network or unexpected failure: open manual review with photo still attached
       console.error("Extraction error:", err);
       setAllModelsFailed(true);
       setStatusNotice("Scanning is busy right now. Enter it manually or try again");
@@ -256,10 +251,6 @@ export function ReceiptScanner({
       });
 
       const data = await res.json();
-
-      if (data.receiptId) {
-        setReceiptId(data.receiptId);
-      }
 
       if (data.allModelsFailed || !data.success) {
         setAllModelsFailed(true);
@@ -312,7 +303,34 @@ export function ReceiptScanner({
     setSaving(true);
     setError(null);
 
+    let savedReceiptId: string | null = null;
+    let photoUploadWarning: string | null = null;
+
     try {
+      // If user selected to save receipt photo, upload to /api/receipts now
+      if (saveReceiptPhoto && currentFile) {
+        try {
+          const compressed = await compressImage(currentFile, 1600, 0.85);
+          const uploadForm = new FormData();
+          uploadForm.append("file", compressed);
+
+          const uploadRes = await fetch("/api/receipts", {
+            method: "POST",
+            body: uploadForm,
+          });
+
+          if (uploadRes.ok) {
+            const uploadData = await uploadRes.json();
+            savedReceiptId = uploadData.receiptId;
+          } else {
+            photoUploadWarning = "Transaction saved, but photo could not be uploaded.";
+          }
+        } catch (uploadErr) {
+          console.warn("Photo upload error:", uploadErr);
+          photoUploadWarning = "Transaction saved, but photo could not be uploaded.";
+        }
+      }
+
       const payload = {
         type,
         amountMinor,
@@ -323,7 +341,7 @@ export function ReceiptScanner({
         note: notes.trim() || (extracted?.notes ? extracted.notes : null),
         occurredAt: new Date(dateStr).toISOString(),
         source: "receipt",
-        receiptId: receiptId || undefined,
+        receiptId: savedReceiptId || undefined,
       };
 
       const res = await fetch("/api/transactions", {
@@ -335,6 +353,10 @@ export function ReceiptScanner({
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || "Failed to save verified transaction");
+      }
+
+      if (photoUploadWarning) {
+        alert(photoUploadWarning);
       }
 
       router.push("/transactions");
@@ -353,7 +375,6 @@ export function ReceiptScanner({
       setImagePreviewUrl(null);
       setCurrentFile(null);
       setExtracted(null);
-      setReceiptId(null);
       setError(null);
       setStatusNotice(null);
       setAllModelsFailed(false);
@@ -480,7 +501,6 @@ export function ReceiptScanner({
       {/* STEP 3: REVIEW SCREEN */}
       {step === "review" && (
         <div className="space-y-6">
-          {/* REQUIREMENT 4 & 5: ERROR STATE WITH 'TRY AGAIN' BUTTON */}
           {allModelsFailed && (
             <div className="p-4 rounded-btn bg-neo-yellow/30 border-2 border-border text-ink font-bold text-xs shadow-neo-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -505,7 +525,6 @@ export function ReceiptScanner({
             </div>
           )}
 
-          {/* WARNING NOTICES WITH TEXT LABELS */}
           {extracted?.is_blurry && (
             <div className="p-3.5 rounded-btn bg-neo-coral/20 border-2 border-border text-ink font-bold text-xs shadow-neo-sm">
               [WARNING: IMAGE MAY BE BLURRY - PLEASE DOUBLE CHECK TOTAL]
@@ -525,7 +544,7 @@ export function ReceiptScanner({
           )}
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* LEFT: RECEIPT IMAGE PREVIEW (col-span-5) */}
+            {/* LEFT: RECEIPT IMAGE PREVIEW */}
             <div className="lg:col-span-5 bg-surface rounded-card border-2 border-border p-4 shadow-neo-sm flex flex-col justify-between">
               <div className="relative max-h-[500px] overflow-auto flex items-center justify-center rounded-btn bg-slate-950 p-2 border-2 border-border">
                 {imagePreviewUrl ? (
@@ -547,7 +566,7 @@ export function ReceiptScanner({
               </div>
             </div>
 
-            {/* RIGHT: EDITABLE FORM FIELDS (col-span-7) */}
+            {/* RIGHT: EDITABLE FORM FIELDS */}
             <div className="lg:col-span-7 bg-surface rounded-card border-2 border-border p-5 sm:p-6 shadow-neo-sm">
               <div className="border-b-2 border-border pb-3 mb-5 flex items-center justify-between">
                 <h2 className="text-base font-extrabold text-ink">
@@ -707,6 +726,26 @@ export function ReceiptScanner({
                   />
                 </Field>
 
+                {/* REQUIREMENT 2: REAL CHECKBOX FOR SAVING PHOTO */}
+                <div className="pt-2">
+                  <label className="flex items-start gap-3 p-3.5 bg-surface-subtle border-2 border-border rounded-btn cursor-pointer shadow-neo-sm select-none hover:bg-surface transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={saveReceiptPhoto}
+                      onChange={(e) => setSaveReceiptPhoto(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 rounded border-2 border-border text-primary accent-primary focus:ring-2 focus:ring-border focus:ring-offset-2"
+                    />
+                    <div>
+                      <span className="text-xs font-black text-ink block">
+                        Save receipt photo with this transaction
+                      </span>
+                      <span className="text-[11px] text-muted font-medium block mt-0.5">
+                        Preserve this image in your ledger. If unticked, the photo is discarded immediately after saving.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+
                 <div className="pt-4 border-t-2 border-border flex flex-wrap gap-2.5">
                   <Button
                     type="button"
@@ -723,7 +762,7 @@ export function ReceiptScanner({
                     className="flex-1"
                     disabled={saving}
                   >
-                    {saving ? "Saving..." : "Confirm & Save Entry"}
+                    {saving ? "Saving Entry..." : "Confirm & Save Entry"}
                   </Button>
                 </div>
               </form>

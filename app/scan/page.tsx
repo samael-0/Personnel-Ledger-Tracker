@@ -11,6 +11,7 @@ export default async function ScanPage() {
   const session = await requireAuth();
 
   let userCurrency = "USD";
+  let userSaveReceiptDefault = false;
   let userCategories: any[] = DEFAULT_CATEGORIES;
   let userWallets: any[] = [];
 
@@ -20,7 +21,10 @@ export default async function ScanPage() {
       () =>
         Promise.all([
           db
-            .select({ currency: users.currency })
+            .select({
+              currency: users.currency,
+              saveReceiptPhotosDefault: users.saveReceiptPhotosDefault,
+            })
             .from(users)
             .where(eq(users.id, session.user.id))
             .limit(1),
@@ -42,8 +46,11 @@ export default async function ScanPage() {
         ])
     );
 
-    if (userRows.length > 0 && userRows[0].currency) {
-      userCurrency = userRows[0].currency;
+    if (userRows.length > 0) {
+      if (userRows[0].currency) userCurrency = userRows[0].currency;
+      if (userRows[0].saveReceiptPhotosDefault !== undefined) {
+        userSaveReceiptDefault = !!userRows[0].saveReceiptPhotosDefault;
+      }
     }
 
     const hiddenSet = new Set(hidden.map((h) => h.categoryId));
@@ -78,6 +85,7 @@ export default async function ScanPage() {
         categories={userCategories}
         wallets={userWallets}
         userCurrency={userCurrency}
+        saveReceiptPhotosDefault={userSaveReceiptDefault}
       />
     </AppShell>
   );

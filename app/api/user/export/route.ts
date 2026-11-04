@@ -28,6 +28,7 @@ export async function GET() {
         fromAccountName: wallets.name,
         toAccountName: toWallets.name,
         source: transactions.source,
+        receiptId: transactions.receiptId,
         note: transactions.note,
       })
       .from(transactions)
@@ -51,6 +52,7 @@ export async function GET() {
       "Destination Amount Decimal",
       "Transfer Fee",
       "Source",
+      "Has Receipt Photo",
       "Note",
     ];
 
@@ -84,6 +86,7 @@ export async function GET() {
           : "0.00"
       ),
       escapeCsv(tx.source),
+      escapeCsv(tx.receiptId ? "Yes" : "No"),
       escapeCsv(tx.note || ""),
     ]);
 

@@ -22,6 +22,13 @@
       "when": 1793809475304,
       "tag": "0002_icy_zeigeist",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793813064870,
+      "tag": "0003_clever_hitman",
+      "breakpoints": true
     }
   ]
 }

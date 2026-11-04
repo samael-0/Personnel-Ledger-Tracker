@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/lib/session";
 import { db } from "@/db";
-import { transactions, categories, wallets } from "@/db/schema";
-import { eq, and, desc, gte, lte, ilike, or, isNull } from "drizzle-orm";
+import { transactions, categories, wallets, receipts } from "@/db/schema";
+import { eq, and, desc, gte, lte, ilike, or, isNull, isNotNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { transactionSchema } from "@/lib/validations/transactions";
 import { DEFAULT_CATEGORIES } from "@/lib/data/defaults";
@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
     const walletId = searchParams.get("walletId");
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
+    const hasReceipt = searchParams.get("hasReceipt");
     const limit = parseInt(searchParams.get("limit") || "100", 10);
 
     const conditions = [eq(transactions.userId, session.user.id)];
@@ -43,6 +44,12 @@ export async function GET(req: NextRequest) {
           eq(transactions.toWalletId, walletId)
         )!
       );
+    }
+
+    if (hasReceipt === "true") {
+      conditions.push(isNotNull(transactions.receiptId));
+    } else if (hasReceipt === "false") {
+      conditions.push(isNull(transactions.receiptId));
     }
 
     if (startDate) {
@@ -143,6 +150,20 @@ export async function POST(req: NextRequest) {
         { error: "Selected source account not found or access denied" },
         { status: 400 }
       );
+    }
+
+    // If receiptId provided, verify user ownership
+    if (receiptId) {
+      const [rec] = await db
+        .select({ id: receipts.id })
+        .from(receipts)
+        .where(and(eq(receipts.id, receiptId), eq(receipts.userId, session.user.id)));
+      if (!rec) {
+        return NextResponse.json(
+          { error: "Receipt photo not found or access denied" },
+          { status: 400 }
+        );
+      }
     }
 
     let toAccountName = "";
@@ -287,6 +308,7 @@ export async function PUT(req: NextRequest) {
       merchant,
       note,
       occurredAt,
+      receiptId,
     } = parsed.data;
 
     // Verify existing transaction belongs to user
@@ -339,27 +361,60 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    await db
-      .update(transactions)
-      .set({
-        type,
-        amountMinor,
-        currency: sourceAccount.currency || currency,
-        categoryId: type === "transfer" ? null : categoryId || null,
-        walletId,
-        toWalletId: type === "transfer" ? toWalletId || null : null,
-        toAmountMinor: type === "transfer" ? toAmountMinor || null : null,
-        transferFeeMinor: type === "transfer" ? transferFeeMinor || 0 : 0,
-        merchant,
-        note: note || null,
-        occurredAt: new Date(occurredAt),
-      })
-      .where(
-        and(
-          eq(transactions.id, id),
-          eq(transactions.userId, session.user.id)
-        )
-      );
+    // If new receiptId provided, verify user ownership
+    if (receiptId) {
+      const [rec] = await db
+        .select({ id: receipts.id })
+        .from(receipts)
+        .where(and(eq(receipts.id, receiptId), eq(receipts.userId, session.user.id)));
+      if (!rec) {
+        return NextResponse.json(
+          { error: "Receipt photo not found or access denied" },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Atomic database transaction: replace/delete old receipt if changed, update transaction
+    await db.transaction(async (tx) => {
+      if (
+        existing.receiptId &&
+        receiptId !== undefined &&
+        existing.receiptId !== receiptId
+      ) {
+        await tx
+          .delete(receipts)
+          .where(
+            and(
+              eq(receipts.id, existing.receiptId),
+              eq(receipts.userId, session.user.id)
+            )
+          );
+      }
+
+      await tx
+        .update(transactions)
+        .set({
+          type,
+          amountMinor,
+          currency: sourceAccount.currency || currency,
+          categoryId: type === "transfer" ? null : categoryId || null,
+          walletId,
+          toWalletId: type === "transfer" ? toWalletId || null : null,
+          toAmountMinor: type === "transfer" ? toAmountMinor || null : null,
+          transferFeeMinor: type === "transfer" ? transferFeeMinor || 0 : 0,
+          merchant,
+          note: note || null,
+          occurredAt: new Date(occurredAt),
+          receiptId: receiptId !== undefined ? receiptId : existing.receiptId,
+        })
+        .where(
+          and(
+            eq(transactions.id, id),
+            eq(transactions.userId, session.user.id)
+          )
+        );
+    });
 
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
@@ -381,11 +436,37 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "ID required" }, { status: 400 });
     }
 
-    await db
-      .delete(transactions)
+    const [existing] = await db
+      .select({ id: transactions.id, receiptId: transactions.receiptId })
+      .from(transactions)
       .where(
         and(eq(transactions.id, id), eq(transactions.userId, session.user.id))
-      );
+      )
+      .limit(1);
+
+    if (!existing) {
+      return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+    }
+
+    // Atomic transaction: delete linked receipt photo if present, then delete transaction
+    await db.transaction(async (tx) => {
+      if (existing.receiptId) {
+        await tx
+          .delete(receipts)
+          .where(
+            and(
+              eq(receipts.id, existing.receiptId),
+              eq(receipts.userId, session.user.id)
+            )
+          );
+      }
+
+      await tx
+        .delete(transactions)
+        .where(
+          and(eq(transactions.id, id), eq(transactions.userId, session.user.id))
+        );
+    });
 
     return NextResponse.json({ success: true });
   } catch (err: unknown) {

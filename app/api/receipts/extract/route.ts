@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/lib/session";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { db } from "@/db";
-import { receipts } from "@/db/schema";
 import { extractReceiptFromImage } from "@/lib/ai/receipt";
 
 const ALLOWED_MIME_TYPES = [
@@ -63,24 +61,11 @@ export async function POST(req: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Store receipt image in Postgres bytea so it is never lost
-    const receiptId = `rec-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    await db.insert(receipts).values({
-      id: receiptId,
-      userId: session.user.id,
-      data: buffer,
-      mimeType: file.type,
-      filename: file.name || "receipt.jpg",
-      fileSize: file.size,
-      createdAt: new Date(),
-    });
-
-    // Run AI extraction
+    // Run AI extraction in memory without persisting image to database
     const extraction = await extractReceiptFromImage(buffer, file.type);
 
     return NextResponse.json({
       success: !extraction.allModelsFailed,
-      receiptId,
       extracted: extraction.data,
       fallbackUsed: extraction.fallbackUsed,
       allModelsFailed: extraction.allModelsFailed || false,

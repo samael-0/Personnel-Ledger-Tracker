@@ -21,16 +21,22 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const { name, currency, image } = parsed.data;
+    const { name, currency, image, saveReceiptPhotosDefault } = parsed.data;
+
+    const updateFields: Record<string, any> = {
+      name,
+      currency,
+      image: image || null,
+      updatedAt: new Date(),
+    };
+
+    if (typeof saveReceiptPhotosDefault === "boolean") {
+      updateFields.saveReceiptPhotosDefault = saveReceiptPhotosDefault;
+    }
 
     await db
       .update(users)
-      .set({
-        name,
-        currency,
-        image: image || null,
-        updatedAt: new Date(),
-      })
+      .set(updateFields)
       .where(eq(users.id, session.user.id));
 
     return NextResponse.json({ success: true });
@@ -39,4 +45,3 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Field } from "@/components/ui/Field";
 import { getCurrencyMeta, parseToMinorUnits } from "@/lib/money";
+import { compressImage } from "@/lib/client-image";
 import {
   CATEGORY_ICON_PRESETS,
   getCategoryIconSymbol,
@@ -43,6 +44,7 @@ export interface TransactionItem {
   merchant: string;
   note?: string | null;
   occurredAt: string | Date;
+  receiptId?: string | null;
 }
 
 interface TransactionSheetProps {
@@ -80,6 +82,15 @@ export function TransactionSheet({
   const [note, setNote] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // Optional Receipt Attachment State
+  const [existingReceiptId, setExistingReceiptId] = React.useState<string | null>(null);
+  const [newReceiptFile, setNewReceiptFile] = React.useState<File | null>(null);
+  const [receiptPreview, setReceiptPreview] = React.useState<string | null>(null);
+  const [isPhotoRemoved, setIsPhotoRemoved] = React.useState(false);
+
+  const receiptCameraRef = React.useRef<HTMLInputElement>(null);
+  const receiptFileRef = React.useRef<HTMLInputElement>(null);
 
   // Categories list with live additions
   const [localCategories, setLocalCategories] = React.useState<Category[]>(initialCategories);
@@ -121,6 +132,18 @@ export function TransactionSheet({
       const d = new Date(initialTransaction.occurredAt);
       setDateStr(d.toISOString().split("T")[0]);
       setNote(initialTransaction.note || "");
+
+      if (initialTransaction.receiptId) {
+        setExistingReceiptId(initialTransaction.receiptId);
+        setReceiptPreview(`/api/receipts/${initialTransaction.receiptId}`);
+        setIsPhotoRemoved(false);
+        setNewReceiptFile(null);
+      } else {
+        setExistingReceiptId(null);
+        setReceiptPreview(null);
+        setIsPhotoRemoved(false);
+        setNewReceiptFile(null);
+      }
     } else {
       setType("expense");
       setAmountStr("0");
@@ -129,6 +152,10 @@ export function TransactionSheet({
       setMerchant("");
       setDateStr(new Date().toISOString().split("T")[0]);
       setNote("");
+      setExistingReceiptId(null);
+      setReceiptPreview(null);
+      setIsPhotoRemoved(false);
+      setNewReceiptFile(null);
 
       const activeCategories = localCategories.filter((c) => c.kind === "expense" && !c.isArchived);
       if (activeCategories.length > 0) setCategoryId(activeCategories[0].id);
@@ -136,7 +163,6 @@ export function TransactionSheet({
       if (defaultWallet) {
         setWalletId(defaultWallet.id);
       }
-      // For transfer, pick a second distinct account as destination
       const otherAccount = wallets.find((w) => !w.isArchived && w.id !== defaultWallet?.id);
       if (otherAccount) {
         setToWalletId(otherAccount.id);
@@ -144,12 +170,28 @@ export function TransactionSheet({
     }
   }, [initialTransaction, isOpen, wallets, defaultWallet]);
 
+  function handleAttachPhoto(file: File) {
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Receipt image must be under 5MB in size.");
+      return;
+    }
+    setNewReceiptFile(file);
+    setIsPhotoRemoved(false);
+    const previewUrl = URL.createObjectURL(file);
+    setReceiptPreview(previewUrl);
+  }
+
+  function handleRemovePhoto() {
+    setNewReceiptFile(null);
+    setIsPhotoRemoved(true);
+    setReceiptPreview(null);
+  }
+
   // Active accounts (exclude archived unless currently selected)
   const availableWallets = React.useMemo(() => {
     return wallets.filter((w) => !w.isArchived || w.id === walletId || w.id === toWalletId);
   }, [wallets, walletId, toWalletId]);
 
-  // Current selected account objects
   const selectedSourceWallet = wallets.find((w) => w.id === walletId);
   const selectedDestWallet = wallets.find((w) => w.id === toWalletId);
 
@@ -159,7 +201,6 @@ export function TransactionSheet({
     selectedDestWallet &&
     selectedSourceWallet.currency !== selectedDestWallet.currency;
 
-  // Active categories for the current kind
   const availableCategories = React.useMemo(() => {
     if (type === "transfer") return [];
     return localCategories.filter(
@@ -167,7 +208,6 @@ export function TransactionSheet({
     );
   }, [localCategories, type, categoryId]);
 
-  // Keypad button handler
   function handleKeyPress(char: string) {
     if (char === "C") {
       setAmountStr("0");
@@ -200,7 +240,6 @@ export function TransactionSheet({
     }
   }
 
-  // Handle Quick Category Add inline without leaving flow
   async function handleCreateCategoryInline(e: React.FormEvent) {
     e.preventDefault();
     if (!newCatName.trim()) return;
@@ -303,7 +342,36 @@ export function TransactionSheet({
 
     setLoading(true);
 
+    let targetReceiptId: string | null = null;
+    let photoUploadFailed = false;
+
     try {
+      // Handle photo upload if a new file was chosen
+      if (newReceiptFile && type !== "transfer") {
+        try {
+          const compressed = await compressImage(newReceiptFile, 1600, 0.85);
+          const formData = new FormData();
+          formData.append("file", compressed);
+          const uploadRes = await fetch("/api/receipts", {
+            method: "POST",
+            body: formData,
+          });
+          if (uploadRes.ok) {
+            const uData = await uploadRes.json();
+            targetReceiptId = uData.receiptId;
+          } else {
+            photoUploadFailed = true;
+          }
+        } catch (uErr) {
+          console.warn("Receipt upload error:", uErr);
+          photoUploadFailed = true;
+        }
+      } else if (isPhotoRemoved) {
+        targetReceiptId = null;
+      } else if (existingReceiptId) {
+        targetReceiptId = existingReceiptId;
+      }
+
       const payload: TransactionItem = {
         id: initialTransaction?.id,
         type,
@@ -320,6 +388,7 @@ export function TransactionSheet({
             : merchant.trim(),
         note: note.trim() || null,
         occurredAt: new Date(dateStr).toISOString(),
+        receiptId: targetReceiptId,
       };
 
       const method = initialTransaction?.id ? "PUT" : "POST";
@@ -332,6 +401,10 @@ export function TransactionSheet({
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || "Failed to record transaction");
+      }
+
+      if (photoUploadFailed) {
+        alert("Transaction was saved successfully, but the receipt photo failed to upload. You can re-attach it by editing this transaction.");
       }
 
       onSaved(payload, initialTransaction?.id ? "edit" : "add");
@@ -448,14 +521,14 @@ export function TransactionSheet({
         </div>
 
         {/* NUMERIC KEYPAD */}
-        <div className="grid grid-cols-3 gap-2 p-2 bg-surface-subtle rounded-card border-2 border-border shadow-neo-sm">
+        <div className="grid grid-cols-3 gap-2">
           {keypadKeys.map((row, rIdx) =>
             row.map((k) => (
               <button
                 key={`${rIdx}-${k}`}
                 type="button"
                 onClick={() => handleKeyPress(k)}
-                className="h-12 bg-surface hover:bg-surface-subtle text-ink font-mono font-extrabold text-lg rounded-btn border-2 border-border shadow-neo-sm active:translate-x-[1px] active:translate-y-[1px] transition-all select-none"
+                className="py-3 sm:py-3.5 bg-surface rounded-control border-2 border-border shadow-neo-sm font-mono font-extrabold text-base sm:text-lg text-ink hover:bg-surface-subtle active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all select-none"
               >
                 {k}
               </button>
@@ -465,7 +538,11 @@ export function TransactionSheet({
 
         {/* TRANSFER FIELDS */}
         {type === "transfer" ? (
-          <div className="space-y-3 pt-1">
+          <div className="space-y-3 p-4 bg-surface-subtle border-2 border-border rounded-card shadow-neo-sm">
+            <span className="text-xs font-extrabold text-ink block border-b-2 border-border pb-2">
+              Transfer Routing
+            </span>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="From Account" required>
                 <Select
@@ -487,32 +564,32 @@ export function TransactionSheet({
                   onChange={(e) => setToWalletId(e.target.value)}
                   required
                 >
-                  {availableWallets.map((w) => (
-                    <option key={w.id} value={w.id} disabled={w.id === walletId}>
-                      {w.name} ({w.currency}) {w.id === walletId ? "(Source)" : ""}
-                    </option>
-                  ))}
+                  <option value="">Select Destination...</option>
+                  {availableWallets
+                    .filter((w) => w.id !== walletId)
+                    .map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name} ({w.currency})
+                      </option>
+                    ))}
                 </Select>
               </Field>
             </div>
 
-            {/* Cross-Currency Amount input */}
             {isCrossCurrency && (
-              <div className="p-3.5 rounded-btn bg-neo-yellow/20 border-2 border-border space-y-2 shadow-neo-sm">
-                <span className="text-xs font-extrabold text-ink block">
-                  Cross-Currency Transfer Detected
+              <div className="p-3 bg-neo-yellow/20 border-2 border-border rounded-btn space-y-2">
+                <span className="text-[11px] font-black text-ink block">
+                  Cross-Currency Conversion ({selectedSourceWallet?.currency} → {selectedDestWallet?.currency})
                 </span>
-                <p className="text-[11px] text-muted font-medium">
-                  Transferring from {selectedSourceWallet?.currency} to{" "}
-                  {selectedDestWallet?.currency}. Enter the destination credit amount.
-                </p>
                 <Field
-                  label={`Destination Received (${selectedDestWallet?.currency})`}
+                  label={`Destination Amount (${selectedDestWallet?.currency})`}
                   required
                 >
                   <Input
-                    type="text"
-                    placeholder="e.g. 1500.00"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
                     value={toAmountStr}
                     onChange={(e) => setToAmountStr(e.target.value)}
                     required
@@ -522,16 +599,18 @@ export function TransactionSheet({
             )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Transfer Fee (Optional)">
+              <Field label={`Transfer Fee (${selectedSourceWallet?.currency || userCurrency})`}>
                 <Input
-                  type="text"
+                  type="number"
+                  step="0.01"
+                  min="0"
                   placeholder="0.00"
                   value={transferFeeStr}
                   onChange={(e) => setTransferFeeStr(e.target.value)}
                 />
               </Field>
 
-              <Field label="Date" required>
+              <Field label="Transfer Date" required>
                 <Input
                   type="date"
                   value={dateStr}
@@ -540,24 +619,11 @@ export function TransactionSheet({
                 />
               </Field>
             </div>
-
-            <Field label="Transfer Description">
-              <Input
-                type="text"
-                placeholder={
-                  selectedDestWallet
-                    ? `Transfer to ${selectedDestWallet.name}`
-                    : "Account Transfer"
-                }
-                value={merchant}
-                onChange={(e) => setMerchant(e.target.value)}
-              />
-            </Field>
           </div>
         ) : (
-          /* STANDARD INCOME / EXPENSE FIELDS */
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            <Field label="Account (Source/Target)" required>
+          /* INCOME & EXPENSE FIELDS */
+          <div className="space-y-3">
+            <Field label="Account" required>
               <Select
                 value={walletId}
                 onChange={(e) => setWalletId(e.target.value)}
@@ -565,7 +631,7 @@ export function TransactionSheet({
               >
                 {availableWallets.map((w) => (
                   <option key={w.id} value={w.id}>
-                    {w.name} ({w.type} / {w.currency}) {w.isDefault ? "★ Default" : ""}
+                    {w.name} ({w.currency})
                   </option>
                 ))}
               </Select>
@@ -573,37 +639,34 @@ export function TransactionSheet({
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-bold text-ink">Category *</label>
+                <label className="text-xs font-bold text-ink">Category</label>
                 <button
                   type="button"
                   onClick={() => setShowAddCategory(!showAddCategory)}
-                  className="text-[11px] font-extrabold text-accent hover:underline flex items-center gap-1"
+                  className="text-xs font-bold text-muted hover:text-ink transition-colors"
                 >
-                  {showAddCategory ? "Close" : "+ New"}
+                  {showAddCategory ? "Cancel New" : "+ New Category"}
                 </button>
               </div>
 
               {showAddCategory ? (
-                <div className="p-3 rounded-btn border-2 border-border bg-surface-subtle shadow-neo-sm space-y-2 mb-2">
-                  <span className="text-[11px] font-extrabold text-ink block">
-                    Quick Category Add ({type})
-                  </span>
+                <div className="p-3 bg-surface-subtle border-2 border-border rounded-control space-y-2.5 shadow-neo-sm">
                   <Input
                     type="text"
-                    placeholder="Category name..."
+                    placeholder="New category name..."
                     value={newCatName}
                     onChange={(e) => setNewCatName(e.target.value)}
                     autoFocus
                   />
-                  <div className="flex items-center gap-2">
+                  <div className="flex gap-2 items-center">
                     <Select
                       value={newCatIcon}
                       onChange={(e) => setNewCatIcon(e.target.value)}
-                      className="text-xs py-1 flex-1"
+                      className="flex-1"
                     >
-                      {CATEGORY_ICON_PRESETS.map((icon) => (
-                        <option key={icon.id} value={icon.id}>
-                          {icon.symbol} {icon.label}
+                      {CATEGORY_ICON_PRESETS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.symbol} {p.label}
                         </option>
                       ))}
                     </Select>
@@ -614,7 +677,7 @@ export function TransactionSheet({
                       onClick={handleCreateCategoryInline}
                       disabled={savingCategory || !newCatName.trim()}
                     >
-                      {savingCategory ? "Adding..." : "Save"}
+                      {savingCategory ? "Saving..." : "Add"}
                     </Button>
                   </div>
                 </div>
@@ -625,7 +688,7 @@ export function TransactionSheet({
                   required
                 >
                   {availableCategories.length === 0 ? (
-                    <option value="">No categories found</option>
+                    <option value="">No active categories</option>
                   ) : (
                     availableCategories.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -666,6 +729,99 @@ export function TransactionSheet({
             onChange={(e) => setNote(e.target.value)}
           />
         </Field>
+
+        {/* OPTIONAL RECEIPT PHOTO (INCOME & EXPENSE ONLY) */}
+        {type !== "transfer" && (
+          <div className="space-y-2 pt-1 border-t-2 border-border">
+            <span className="text-xs font-bold text-ink block">
+              Receipt Photo (Optional)
+            </span>
+
+            {/* Hidden inputs */}
+            <input
+              ref={receiptCameraRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleAttachPhoto(f);
+              }}
+            />
+            <input
+              ref={receiptFileRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,application/pdf"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleAttachPhoto(f);
+              }}
+            />
+
+            {receiptPreview ? (
+              <div className="flex items-center gap-3 p-3 bg-surface-subtle border-2 border-border rounded-btn shadow-neo-sm">
+                <div className="w-14 h-14 rounded-btn border-2 border-border overflow-hidden bg-slate-950 shrink-0 flex items-center justify-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={receiptPreview}
+                    alt="Attached receipt preview"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <span className="text-xs font-bold text-ink block truncate">
+                    {newReceiptFile ? newReceiptFile.name : "Saved Receipt Photo"}
+                  </span>
+                  <span className="text-[11px] text-muted block">
+                    {newReceiptFile
+                      ? `${Math.round(newReceiptFile.size / 1024)} KB (ready to save)`
+                      : "Attached in database"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    type="button"
+                    variant="neutral"
+                    size="sm"
+                    onClick={() => receiptFileRef.current?.click()}
+                  >
+                    Replace
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="quiet"
+                    size="sm"
+                    onClick={handleRemovePhoto}
+                    className="text-danger hover:text-danger"
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="cyan"
+                  size="sm"
+                  onClick={() => receiptFileRef.current?.click()}
+                >
+                  Attach Receipt Photo
+                </Button>
+                <Button
+                  type="button"
+                  variant="neutral"
+                  size="sm"
+                  onClick={() => receiptCameraRef.current?.click()}
+                >
+                  Take Photo
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ACTIONS */}
         <div className="flex gap-3 pt-3 border-t-2 border-border">

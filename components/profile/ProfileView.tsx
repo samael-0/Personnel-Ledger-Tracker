@@ -19,17 +19,28 @@ interface ProfileViewProps {
     email: string;
     currency: string;
     image?: string | null;
+    saveReceiptPhotosDefault?: boolean;
+  };
+  initialStorageStats?: {
+    count: number;
+    totalBytes: number;
   };
 }
 
-export function ProfileView({ user }: ProfileViewProps) {
+export function ProfileView({ user, initialStorageStats = { count: 0, totalBytes: 0 } }: ProfileViewProps) {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
 
   const [name, setName] = React.useState(user.name);
   const [currency, setCurrency] = React.useState(user.currency || "USD");
   const [image, setImage] = React.useState<string | null>(user.image || null);
+  const [saveReceiptPhotosDefault, setSaveReceiptPhotosDefault] = React.useState(
+    user.saveReceiptPhotosDefault ?? false
+  );
+  const [storageStats, setStorageStats] = React.useState(initialStorageStats);
   const [loading, setLoading] = React.useState(false);
+  const [deletingReceipts, setDeletingReceipts] = React.useState(false);
+  const [isDeleteReceiptsOpen, setIsDeleteReceiptsOpen] = React.useState(false);
   const [statusMsg, setStatusMsg] = React.useState<{
     type: "success" | "error";
     text: string;
@@ -67,7 +78,12 @@ export function ProfileView({ user }: ProfileViewProps) {
       const res = await fetch("/api/user/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, currency, image }),
+        body: JSON.stringify({
+          name,
+          currency,
+          image,
+          saveReceiptPhotosDefault,
+        }),
       });
 
       if (!res.ok) {
@@ -86,6 +102,33 @@ export function ProfileView({ user }: ProfileViewProps) {
       setStatusMsg({ type: "error", text: message });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDeleteAllReceipts() {
+    setDeletingReceipts(true);
+    setStatusMsg(null);
+
+    try {
+      const res = await fetch("/api/user/receipts", { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to delete receipts");
+      }
+
+      setStorageStats({ count: 0, totalBytes: 0 });
+      setIsDeleteReceiptsOpen(false);
+      setStatusMsg({
+        type: "success",
+        text: "All saved receipt photos have been deleted. Transactions remain untouched.",
+      });
+      router.refresh();
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Error deleting receipts";
+      setStatusMsg({ type: "error", text: message });
+    } finally {
+      setDeletingReceipts(false);
     }
   }
 
@@ -112,6 +155,11 @@ export function ProfileView({ user }: ProfileViewProps) {
       setLoading(false);
     }
   }
+
+  const formattedStorage =
+    storageStats.totalBytes > 1024 * 1024
+      ? `${(storageStats.totalBytes / (1024 * 1024)).toFixed(2)} MB`
+      : `${Math.round(storageStats.totalBytes / 1024)} KB`;
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -250,6 +298,26 @@ export function ProfileView({ user }: ProfileViewProps) {
             </Select>
           </Field>
 
+          {/* RECEIPT PHOTO DEFAULT PREFERENCE */}
+          <div className="pt-1">
+            <label className="flex items-start gap-3 p-3.5 bg-surface-subtle border-2 border-border rounded-btn cursor-pointer shadow-neo-sm select-none hover:bg-surface transition-colors">
+              <input
+                type="checkbox"
+                checked={saveReceiptPhotosDefault}
+                onChange={(e) => setSaveReceiptPhotosDefault(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded border-2 border-border text-primary accent-primary focus:ring-2 focus:ring-border focus:ring-offset-2"
+              />
+              <div>
+                <span className="text-xs font-black text-ink block">
+                  Save scanned receipt photos by default
+                </span>
+                <span className="text-[11px] text-muted font-medium block mt-0.5">
+                  When scanning receipts with camera or file, automatically check &quot;Save receipt photo with this transaction&quot;. You can still toggle it per scan.
+                </span>
+              </div>
+            </label>
+          </div>
+
           <div className="pt-2">
             <Button
               type="submit"
@@ -261,6 +329,57 @@ export function ProfileView({ user }: ProfileViewProps) {
             </Button>
           </div>
         </form>
+      </div>
+
+      {/* RECEIPT STORAGE MANAGEMENT */}
+      <div className="bg-surface rounded-card border-2 border-border p-5 sm:p-6 shadow-neo-sm space-y-4">
+        <div className="border-b-2 border-border pb-3">
+          <h2 className="text-sm font-extrabold text-ink">
+            Receipt Photo Storage
+          </h2>
+          <p className="text-xs font-medium text-muted mt-0.5">
+            Monitor and control storage usage of receipt attachments
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="p-3 bg-surface-subtle border-2 border-border rounded-btn shadow-neo-sm">
+            <span className="text-[10px] font-extrabold text-muted uppercase block">
+              Photos Saved
+            </span>
+            <span className="text-base sm:text-lg font-black font-mono text-ink">
+              {storageStats.count} {storageStats.count === 1 ? "photo" : "photos"}
+            </span>
+          </div>
+
+          <div className="p-3 bg-surface-subtle border-2 border-border rounded-btn shadow-neo-sm">
+            <span className="text-[10px] font-extrabold text-muted uppercase block">
+              Total Database Size
+            </span>
+            <span className="text-base sm:text-lg font-black font-mono text-ink">
+              {formattedStorage}
+            </span>
+          </div>
+        </div>
+
+        <div className="p-3 rounded-btn bg-surface-subtle border-2 border-border text-[11px] text-muted font-medium leading-relaxed">
+          <span className="font-bold text-ink">Free Tier Note: </span>
+          Receipt photos are stored directly in your PostgreSQL database (Postgres bytea) without external cloud S3 buckets. You can delete photos at any time to reclaim database quota; all financial transaction numbers, dates, categories, and accounts remain completely intact.
+        </div>
+
+        {storageStats.count > 0 && (
+          <div className="pt-1">
+            <Button
+              type="button"
+              variant="quiet"
+              size="sm"
+              onClick={() => setIsDeleteReceiptsOpen(true)}
+              className="text-danger hover:text-danger hover:border-danger"
+            >
+              Delete All Saved Receipt Photos
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* FINANCE CONFIGURATION */}
@@ -338,6 +457,36 @@ export function ProfileView({ user }: ProfileViewProps) {
           </Button>
         </div>
       </div>
+
+      {/* DELETE ALL RECEIPTS DIALOG */}
+      <Dialog
+        isOpen={isDeleteReceiptsOpen}
+        onClose={() => setIsDeleteReceiptsOpen(false)}
+        title="Delete All Receipt Photos?"
+        description="This will purge all stored receipt image bytes from your database."
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-muted leading-relaxed">
+            All your transaction details (merchants, categories, amounts, dates, and accounts) will remain 100% intact. Only the attached photo images will be deleted.
+          </p>
+          <div className="flex gap-2.5 justify-end pt-2">
+            <Button
+              variant="quiet"
+              onClick={() => setIsDeleteReceiptsOpen(false)}
+              disabled={deletingReceipts}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={deletingReceipts}
+              onClick={handleDeleteAllReceipts}
+            >
+              {deletingReceipts ? "Purging Photos..." : "Confirm Delete Photos"}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
 
       {/* DELETE ACCOUNT DIALOG */}
       <Dialog

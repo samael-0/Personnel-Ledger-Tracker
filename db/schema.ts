@@ -36,6 +36,7 @@ export const users = pgTable("user", {
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
   currency: text("currency").notNull().default("USD"),
+  saveReceiptPhotosDefault: boolean("save_receipt_photos_default").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

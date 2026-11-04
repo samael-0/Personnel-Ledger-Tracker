@@ -55,6 +55,7 @@ export function TransactionListView({
   const [typeFilter, setTypeFilter] = React.useState<string>("all");
   const [categoryFilter, setCategoryFilter] = React.useState<string>("all");
   const [walletFilter, setWalletFilter] = React.useState<string>("all");
+  const [receiptFilter, setReceiptFilter] = React.useState<string>("all");
 
   const [isSheetOpen, setIsSheetOpen] = React.useState(false);
   const [editingTx, setEditingTx] = React.useState<TransactionRecord | null>(null);
@@ -69,6 +70,8 @@ export function TransactionListView({
       if (typeFilter !== "all") params.set("type", typeFilter);
       if (categoryFilter !== "all") params.set("categoryId", categoryFilter);
       if (walletFilter !== "all") params.set("walletId", walletFilter);
+      if (receiptFilter === "with_receipt") params.set("hasReceipt", "true");
+      if (receiptFilter === "no_receipt") params.set("hasReceipt", "false");
 
       const res = await fetch(`/api/transactions?${params.toString()}`);
       if (res.ok) {
@@ -80,7 +83,7 @@ export function TransactionListView({
     } finally {
       setLoading(false);
     }
-  }, [search, typeFilter, categoryFilter, walletFilter]);
+  }, [search, typeFilter, categoryFilter, walletFilter, receiptFilter]);
 
   const isFirstMount = React.useRef(true);
 
@@ -127,66 +130,76 @@ export function TransactionListView({
           categoryIcon: categories.find((c) => c.id === optimisticTx.categoryId)?.icon,
           walletId: optimisticTx.walletId,
           walletName: wallets.find((w) => w.id === optimisticTx.walletId)?.name,
+          toWalletId: optimisticTx.toWalletId,
+          toWalletName: wallets.find((w) => w.id === optimisticTx.toWalletId)?.name,
+          toAmountMinor: optimisticTx.toAmountMinor,
+          transferFeeMinor: optimisticTx.transferFeeMinor,
           merchant: optimisticTx.merchant,
           note: optimisticTx.note,
           occurredAt: new Date(optimisticTx.occurredAt),
-          source: (optimisticTx.source as any) || "manual",
-                  };
+          source: optimisticTx.source || "manual",
+          receiptId: optimisticTx.receiptId || null,
+        };
         setTxs((prev) => [fullItem, ...prev]);
       }
-      fetchTransactions();
     },
-    [fetchTransactions, categories, wallets]
+    [categories, wallets, fetchTransactions]
   );
 
-  // Group transactions by Date string (YYYY-MM-DD)
+  // Group transactions by Date Header
   const groupedByDay = React.useMemo(() => {
-    const groups: { [dateStr: string]: TransactionRecord[] } = {};
+    const groups: Record<string, TransactionRecord[]> = {};
     for (const tx of txs) {
       const d = new Date(tx.occurredAt);
       const dateKey = isNaN(d.getTime())
-        ? "Other"
-        : d.toISOString().split("T")[0];
+        ? "Invalid Date"
+        : d.toLocaleDateString("en-US", {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          });
       if (!groups[dateKey]) {
         groups[dateKey] = [];
       }
       groups[dateKey].push(tx);
     }
-    return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+    return Object.entries(groups);
   }, [txs]);
 
   return (
     <div className="space-y-6">
-      {/* HEADER BAR */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-surface p-5 sm:p-6 rounded-card border-2 border-border shadow-neo">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-ink">
-            Transaction Ledger
-          </h1>
-          <p className="text-xs font-medium text-muted mt-0.5">
-            Exact minor units recorded across accounts in {userCurrency}
-          </p>
+      {/* HEADER SECTION */}
+      <div className="bg-surface rounded-card border-2 border-border p-5 sm:p-6 shadow-neo">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-ink">
+              Transaction Ledger
+            </h1>
+            <p className="text-xs font-medium text-muted mt-0.5">
+              Unified double-entry records with attached receipt evidence.
+            </p>
+          </div>
+          <Button
+            variant="primary"
+            size="md"
+            onClick={() => {
+              setEditingTx(null);
+              setIsSheetOpen(true);
+            }}
+          >
+            + Add Transaction
+          </Button>
         </div>
-        <Button
-          variant="primary"
-          size="md"
-          onClick={() => {
-            setEditingTx(null);
-            setIsSheetOpen(true);
-          }}
-          className="self-start sm:self-auto"
-        >
-          + Add Entry
-        </Button>
       </div>
 
-      {/* SEARCH AND FILTERS */}
+      {/* SEARCH AND FILTER BAR */}
       <div className="bg-surface rounded-card border-2 border-border p-4 shadow-neo-sm space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-          <div className="sm:col-span-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+          <div className="lg:col-span-2">
             <Input
               type="text"
-              placeholder="Search merchant, notes..."
+              placeholder="Search merchant, notes, receipts..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -195,6 +208,7 @@ export function TransactionListView({
             <Select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
+              aria-label="Filter by transaction type"
             >
               <option value="all">All Types (+ / - / ⇄)</option>
               <option value="expense">Expense Only (-)</option>
@@ -206,6 +220,7 @@ export function TransactionListView({
             <Select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
+              aria-label="Filter by category"
             >
               <option value="all">All Categories</option>
               {categories.map((c) => (
@@ -217,15 +232,13 @@ export function TransactionListView({
           </div>
           <div>
             <Select
-              value={walletFilter}
-              onChange={(e) => setWalletFilter(e.target.value)}
+              value={receiptFilter}
+              onChange={(e) => setReceiptFilter(e.target.value)}
+              aria-label="Filter by receipt attachment"
             >
-              <option value="all">All Accounts</option>
-              {wallets.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name} ({w.currency})
-                </option>
-              ))}
+              <option value="all">All Receipts</option>
+              <option value="with_receipt">Has Receipt Photo</option>
+              <option value="no_receipt">No Receipt Photo</option>
             </Select>
           </div>
         </div>
@@ -249,7 +262,6 @@ export function TransactionListView({
       ) : (
         <div className="space-y-4">
           {groupedByDay.map(([dateStr, items]) => {
-            // Day net excludes transfers except for transfer fees
             const dayNetMinor = items.reduce((acc, curr) => {
               if (curr.type === "income") return acc + curr.amountMinor;
               if (curr.type === "expense") return acc - curr.amountMinor;
@@ -305,18 +317,38 @@ export function TransactionListView({
                             <span className="font-bold text-sm text-ink truncate">
                               {tx.merchant}
                             </span>
-                            {tx.source === "receipt" && (
+                            {/* REQUIREMENT 4: ACCESSIBLE "HAS RECEIPT" LABEL/ICON */}
+                            {tx.receiptId && (
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (tx.receiptId) {
-                                    setViewingReceiptId(tx.receiptId);
-                                  }
+                                  setViewingReceiptId(tx.receiptId!);
                                 }}
-                                className="text-[10px] font-bold bg-neo-cyan text-ink border border-border px-2 py-0.5 rounded-pill shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px]"
+                                aria-label="Has receipt photo - click to view"
+                                title="Has receipt photo"
+                                className="inline-flex items-center gap-1 text-[10px] font-extrabold bg-neo-yellow/30 hover:bg-neo-yellow/60 border border-border px-2 py-0.5 rounded-pill text-ink transition-colors shadow-neo-sm"
                               >
-                                View Receipt
+                                <svg
+                                  className="w-3 h-3 text-ink"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                  strokeWidth="2.5"
+                                  aria-hidden="true"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+                                  />
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
+                                  />
+                                </svg>
+                                <span>Has Receipt</span>
                               </button>
                             )}
                           </div>
@@ -408,8 +440,8 @@ export function TransactionListView({
       <Dialog
         isOpen={!!viewingReceiptId}
         onClose={() => setViewingReceiptId(null)}
-        title="Attached Scanned Receipt"
-        description="Authentic image preserved in database."
+        title="Attached Receipt Photo"
+        description="Authentic image preserved securely in database."
         variant="modal"
       >
         {viewingReceiptId && (
@@ -422,7 +454,15 @@ export function TransactionListView({
                 className="max-h-[60vh] object-contain rounded-btn"
               />
             </div>
-            <div className="flex justify-end">
+            <div className="flex justify-between items-center pt-2">
+              <a
+                href={`/api/receipts/${viewingReceiptId}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs font-bold text-ink underline hover:text-primary"
+              >
+                Open Full Size ↗
+              </a>
               <Button
                 variant="quiet"
                 onClick={() => setViewingReceiptId(null)}

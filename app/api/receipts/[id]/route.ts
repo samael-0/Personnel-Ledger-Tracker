@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/lib/session";
 import { db } from "@/db";
-import { receipts } from "@/db/schema";
+import { receipts, transactions } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 
 export async function GET(
@@ -40,6 +40,57 @@ export async function GET(
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Error serving receipt";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const session = await getServerSession();
+    if (!session || !session.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { id } = await params;
+
+    const [existing] = await db
+      .select({ id: receipts.id })
+      .from(receipts)
+      .where(and(eq(receipts.id, id), eq(receipts.userId, session.user.id)))
+      .limit(1);
+
+    if (!existing) {
+      return NextResponse.json({ error: "Receipt not found" }, { status: 404 });
+    }
+
+    // Atomic transaction: unlink from any transactions, then delete receipt image
+    await db.transaction(async (tx) => {
+      await tx
+        .update(transactions)
+        .set({ receiptId: null })
+        .where(
+          and(
+            eq(transactions.receiptId, id),
+            eq(transactions.userId, session.user.id)
+          )
+        );
+
+      await tx
+        .delete(receipts)
+        .where(
+          and(
+            eq(receipts.id, id),
+            eq(receipts.userId, session.user.id)
+          )
+        );
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Error deleting receipt";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
