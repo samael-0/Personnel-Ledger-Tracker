@@ -2,8 +2,9 @@ import { requireAuth } from "@/lib/session";
 import { AppShell } from "@/components/AppShell";
 import { TransactionsPageWrapper } from "@/components/transactions/TransactionsPageWrapper";
 import { db } from "@/db";
-import { transactions, categories, wallets, users } from "@/db/schema";
+import { transactions, categories, wallets, users, userHiddenCategories } from "@/db/schema";
 import { eq, desc, or, isNull } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { DEFAULT_CATEGORIES, DEFAULT_WALLETS } from "@/lib/data/defaults";
 
 export default async function TransactionsPage() {
@@ -25,23 +26,36 @@ export default async function TransactionsPage() {
       userCurrency = user[0].currency;
     }
 
+    const toWallets = alias(wallets, "to_wallets");
+
+    const hidden = await db
+      .select({ categoryId: userHiddenCategories.categoryId })
+      .from(userHiddenCategories)
+      .where(eq(userHiddenCategories.userId, session.user.id));
+    const hiddenSet = new Set(hidden.map((h) => h.categoryId));
+
     const fetchedCats = await db
       .select()
       .from(categories)
       .where(or(eq(categories.userId, session.user.id), isNull(categories.userId)));
 
     if (fetchedCats.length > 0) {
-      userCategories = fetchedCats.map((c) => ({
-        id: c.id,
-        name: c.name,
-        kind: c.kind as "income" | "expense",
-      }));
+      userCategories = fetchedCats
+        .filter((c) => !hiddenSet.has(c.id))
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          kind: c.kind as "income" | "expense",
+          icon: c.icon,
+          isArchived: c.isArchived,
+        }));
     }
 
     const fetchedWallets = await db
       .select()
       .from(wallets)
-      .where(eq(wallets.userId, session.user.id));
+      .where(eq(wallets.userId, session.user.id))
+      .orderBy(wallets.sortOrder, wallets.createdAt);
 
     if (fetchedWallets.length > 0) {
       userWallets = fetchedWallets.map((w) => ({
@@ -49,6 +63,8 @@ export default async function TransactionsPage() {
         name: w.name,
         type: w.type,
         currency: w.currency,
+        isDefault: w.isDefault,
+        isArchived: w.isArchived,
       }));
     } else {
       userWallets = DEFAULT_WALLETS.map((w, i) => ({
@@ -56,6 +72,8 @@ export default async function TransactionsPage() {
         name: w.name,
         type: w.type,
         currency: userCurrency,
+        isDefault: i === 0,
+        isArchived: false,
       }));
     }
 
@@ -68,8 +86,13 @@ export default async function TransactionsPage() {
         currency: transactions.currency,
         categoryId: transactions.categoryId,
         categoryName: categories.name,
+        categoryIcon: categories.icon,
         walletId: transactions.walletId,
         walletName: wallets.name,
+        toWalletId: transactions.toWalletId,
+        toWalletName: toWallets.name,
+        toAmountMinor: transactions.toAmountMinor,
+        transferFeeMinor: transactions.transferFeeMinor,
         merchant: transactions.merchant,
         note: transactions.note,
         occurredAt: transactions.occurredAt,
@@ -80,6 +103,7 @@ export default async function TransactionsPage() {
       .from(transactions)
       .leftJoin(categories, eq(transactions.categoryId, categories.id))
       .leftJoin(wallets, eq(transactions.walletId, wallets.id))
+      .leftJoin(toWallets, eq(transactions.toWalletId, toWallets.id))
       .where(eq(transactions.userId, session.user.id))
       .orderBy(desc(transactions.occurredAt))
       .limit(100);

@@ -2,7 +2,7 @@ import { requireAuth } from "@/lib/session";
 import { AppShell } from "@/components/AppShell";
 import { ReceiptScanner } from "@/components/receipts/ReceiptScanner";
 import { db } from "@/db";
-import { categories, wallets, users } from "@/db/schema";
+import { categories, wallets, users, userHiddenCategories } from "@/db/schema";
 import { eq, or, isNull } from "drizzle-orm";
 import { DEFAULT_CATEGORIES, DEFAULT_WALLETS } from "@/lib/data/defaults";
 
@@ -24,19 +24,26 @@ export default async function ScanPage() {
       userCurrency = user[0].currency;
     }
 
+    const hidden = await db
+      .select({ categoryId: userHiddenCategories.categoryId })
+      .from(userHiddenCategories)
+      .where(eq(userHiddenCategories.userId, session.user.id));
+    const hiddenSet = new Set(hidden.map((h) => h.categoryId));
+
     const fetchedCats = await db
       .select()
       .from(categories)
       .where(or(eq(categories.userId, session.user.id), isNull(categories.userId)));
 
     if (fetchedCats.length > 0) {
-      userCategories = fetchedCats;
+      userCategories = fetchedCats.filter((c) => !hiddenSet.has(c.id));
     }
 
     const fetchedWallets = await db
       .select()
       .from(wallets)
-      .where(eq(wallets.userId, session.user.id));
+      .where(eq(wallets.userId, session.user.id))
+      .orderBy(wallets.sortOrder, wallets.createdAt);
 
     if (fetchedWallets.length > 0) {
       userWallets = fetchedWallets;

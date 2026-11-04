@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/lib/session";
 import { db } from "@/db";
 import { transactions, categories, wallets } from "@/db/schema";
-import { eq, and, desc, gte, lte, ilike, or } from "drizzle-orm";
+import { eq, and, desc, gte, lte, ilike, or, isNull } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { transactionSchema } from "@/lib/validations/transactions";
+
+const toWallets = alias(wallets, "to_wallets");
 
 export async function GET(req: NextRequest) {
   try {
@@ -23,7 +26,7 @@ export async function GET(req: NextRequest) {
 
     const conditions = [eq(transactions.userId, session.user.id)];
 
-    if (type && (type === "income" || type === "expense")) {
+    if (type && (type === "income" || type === "expense" || type === "transfer")) {
       conditions.push(eq(transactions.type, type));
     }
 
@@ -32,7 +35,13 @@ export async function GET(req: NextRequest) {
     }
 
     if (walletId) {
-      conditions.push(eq(transactions.walletId, walletId));
+      // Account filter matches if the account was the source or destination
+      conditions.push(
+        or(
+          eq(transactions.walletId, walletId),
+          eq(transactions.toWalletId, walletId)
+        )!
+      );
     }
 
     if (startDate) {
@@ -61,8 +70,13 @@ export async function GET(req: NextRequest) {
         currency: transactions.currency,
         categoryId: transactions.categoryId,
         categoryName: categories.name,
+        categoryIcon: categories.icon,
         walletId: transactions.walletId,
         walletName: wallets.name,
+        toWalletId: transactions.toWalletId,
+        toWalletName: toWallets.name,
+        toAmountMinor: transactions.toAmountMinor,
+        transferFeeMinor: transactions.transferFeeMinor,
         merchant: transactions.merchant,
         note: transactions.note,
         occurredAt: transactions.occurredAt,
@@ -73,6 +87,7 @@ export async function GET(req: NextRequest) {
       .from(transactions)
       .leftJoin(categories, eq(transactions.categoryId, categories.id))
       .leftJoin(wallets, eq(transactions.walletId, wallets.id))
+      .leftJoin(toWallets, eq(transactions.toWalletId, toWallets.id))
       .where(and(...conditions))
       .orderBy(desc(transactions.occurredAt))
       .limit(limit);
@@ -100,20 +115,109 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const {
+      type,
+      amountMinor,
+      currency,
+      categoryId,
+      walletId,
+      toWalletId,
+      toAmountMinor,
+      transferFeeMinor,
+      merchant,
+      note,
+      occurredAt,
+      source,
+      receiptId,
+    } = parsed.data;
+
+    // Verify source account belongs to authenticated user
+    const [sourceAccount] = await db
+      .select()
+      .from(wallets)
+      .where(and(eq(wallets.id, walletId), eq(wallets.userId, session.user.id)));
+
+    if (!sourceAccount) {
+      return NextResponse.json(
+        { error: "Selected source account not found or access denied" },
+        { status: 400 }
+      );
+    }
+
+    let toAccountName = "";
+    if (type === "transfer") {
+      if (!toWalletId || toWalletId === walletId) {
+        return NextResponse.json(
+          { error: "Transfer must have distinct source and destination accounts" },
+          { status: 400 }
+        );
+      }
+
+      // Verify destination account belongs to user
+      const [destAccount] = await db
+        .select()
+        .from(wallets)
+        .where(and(eq(wallets.id, toWalletId), eq(wallets.userId, session.user.id)));
+
+      if (!destAccount) {
+        return NextResponse.json(
+          { error: "Destination account not found or access denied" },
+          { status: 400 }
+        );
+      }
+      toAccountName = destAccount.name;
+
+      // If currencies differ, require toAmountMinor
+      if (sourceAccount.currency !== destAccount.currency && !toAmountMinor) {
+        return NextResponse.json(
+          {
+            error: `Transfer between different currencies (${sourceAccount.currency} to ${destAccount.currency}) requires destination amount.`,
+          },
+          { status: 400 }
+        );
+      }
+    } else {
+      // For income or expense, verify category belongs to user or is shared default
+      if (categoryId) {
+        const [cat] = await db
+          .select()
+          .from(categories)
+          .where(
+            and(
+              eq(categories.id, categoryId),
+              or(eq(categories.userId, session.user.id), isNull(categories.userId))
+            )
+          );
+
+        if (!cat) {
+          return NextResponse.json(
+            { error: "Selected category not found or access denied" },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
     const txId = `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const newTx = {
       id: txId,
       userId: session.user.id,
-      type: parsed.data.type,
-      amountMinor: parsed.data.amountMinor,
-      currency: parsed.data.currency,
-      categoryId: parsed.data.categoryId,
-      walletId: parsed.data.walletId,
-      merchant: parsed.data.merchant,
-      note: parsed.data.note || null,
-      occurredAt: new Date(parsed.data.occurredAt),
-      source: parsed.data.source,
-      receiptId: parsed.data.receiptId || null,
+      type,
+      amountMinor,
+      currency: sourceAccount.currency || currency,
+      categoryId: type === "transfer" ? null : categoryId || null,
+      walletId,
+      toWalletId: type === "transfer" ? toWalletId || null : null,
+      toAmountMinor: type === "transfer" ? toAmountMinor || null : null,
+      transferFeeMinor: type === "transfer" ? transferFeeMinor || 0 : 0,
+      merchant:
+        type === "transfer" && merchant === "Transfer"
+          ? `Transfer to ${toAccountName || "Account"}`
+          : merchant,
+      note: note || null,
+      occurredAt: new Date(occurredAt),
+      source,
+      receiptId: receiptId || null,
       createdAt: new Date(),
     };
 
@@ -142,21 +246,89 @@ export async function PUT(req: NextRequest) {
       );
     }
 
+    const {
+      id,
+      type,
+      amountMinor,
+      currency,
+      categoryId,
+      walletId,
+      toWalletId,
+      toAmountMinor,
+      transferFeeMinor,
+      merchant,
+      note,
+      occurredAt,
+    } = parsed.data;
+
+    // Verify existing transaction belongs to user
+    const [existing] = await db
+      .select()
+      .from(transactions)
+      .where(and(eq(transactions.id, id), eq(transactions.userId, session.user.id)));
+
+    if (!existing) {
+      return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+    }
+
+    // Verify source account belongs to user
+    const [sourceAccount] = await db
+      .select()
+      .from(wallets)
+      .where(and(eq(wallets.id, walletId), eq(wallets.userId, session.user.id)));
+
+    if (!sourceAccount) {
+      return NextResponse.json({ error: "Source account not found" }, { status: 400 });
+    }
+
+    if (type === "transfer") {
+      if (!toWalletId || toWalletId === walletId) {
+        return NextResponse.json(
+          { error: "Transfer must have distinct source and destination accounts" },
+          { status: 400 }
+        );
+      }
+
+      const [destAccount] = await db
+        .select()
+        .from(wallets)
+        .where(and(eq(wallets.id, toWalletId), eq(wallets.userId, session.user.id)));
+
+      if (!destAccount) {
+        return NextResponse.json(
+          { error: "Destination account not found" },
+          { status: 400 }
+        );
+      }
+
+      if (sourceAccount.currency !== destAccount.currency && !toAmountMinor) {
+        return NextResponse.json(
+          {
+            error: `Transfer between different currencies (${sourceAccount.currency} to ${destAccount.currency}) requires destination amount.`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     await db
       .update(transactions)
       .set({
-        type: parsed.data.type,
-        amountMinor: parsed.data.amountMinor,
-        currency: parsed.data.currency,
-        categoryId: parsed.data.categoryId,
-        walletId: parsed.data.walletId,
-        merchant: parsed.data.merchant,
-        note: parsed.data.note || null,
-        occurredAt: new Date(parsed.data.occurredAt),
+        type,
+        amountMinor,
+        currency: sourceAccount.currency || currency,
+        categoryId: type === "transfer" ? null : categoryId || null,
+        walletId,
+        toWalletId: type === "transfer" ? toWalletId || null : null,
+        toAmountMinor: type === "transfer" ? toAmountMinor || null : null,
+        transferFeeMinor: type === "transfer" ? transferFeeMinor || 0 : 0,
+        merchant,
+        note: note || null,
+        occurredAt: new Date(occurredAt),
       })
       .where(
         and(
-          eq(transactions.id, parsed.data.id),
+          eq(transactions.id, id),
           eq(transactions.userId, session.user.id)
         )
       );
@@ -193,4 +365,3 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

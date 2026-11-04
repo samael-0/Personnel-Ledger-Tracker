@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { transactions, categories, wallets, users } from "@/db/schema";
 import { eq, desc, or, isNull } from "drizzle-orm";
 import { DEFAULT_CATEGORIES, DEFAULT_WALLETS } from "@/lib/data/defaults";
+import { getAccountsWithBalances } from "@/lib/data/accounts";
 
 export default async function DashboardPage() {
   const session = await requireAuth();
@@ -34,19 +35,18 @@ export default async function DashboardPage() {
       userCategories = fetchedCats;
     }
 
-    const fetchedWallets = await db
-      .select()
-      .from(wallets)
-      .where(eq(wallets.userId, session.user.id));
-
-    if (fetchedWallets.length > 0) {
-      userWallets = fetchedWallets;
+    const accountsData = await getAccountsWithBalances(session.user.id, false);
+    if (accountsData.accounts.length > 0) {
+      userWallets = accountsData.accounts;
     } else {
       userWallets = DEFAULT_WALLETS.map((w, i) => ({
         id: `wal-default-${i}`,
         name: w.name,
         type: w.type,
         currency: userCurrency,
+        isDefault: i === 0,
+        isArchived: false,
+        currentBalanceMinor: 0,
       }));
     }
 

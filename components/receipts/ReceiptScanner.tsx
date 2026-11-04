@@ -9,6 +9,7 @@ import { Field } from "@/components/ui/Field";
 import { compressImage } from "@/lib/client-image";
 import { parseToMinorUnits, getCurrencyMeta } from "@/lib/money";
 import { type Category, type Wallet } from "@/components/transactions/TransactionSheet";
+import { getCategoryIconSymbol } from "@/lib/data/category-icons";
 
 interface ReceiptScannerProps {
   categories: Category[];
@@ -33,7 +34,7 @@ interface ExtractedData {
 }
 
 export function ReceiptScanner({
-  categories,
+  categories: initialCategories,
   wallets,
   userCurrency,
 }: ReceiptScannerProps) {
@@ -41,6 +42,7 @@ export function ReceiptScanner({
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const cameraInputRef = React.useRef<HTMLInputElement>(null);
 
+  const [localCategories, setLocalCategories] = React.useState<Category[]>(initialCategories);
   const [step, setStep] = React.useState<"idle" | "uploading" | "review">("idle");
   const [imagePreviewUrl, setImagePreviewUrl] = React.useState<string | null>(null);
   const [currentFile, setCurrentFile] = React.useState<File | null>(null);
@@ -62,14 +64,106 @@ export function ReceiptScanner({
   const [notes, setNotes] = React.useState("");
   const [saving, setSaving] = React.useState(false);
 
+  // Inline category suggestion & creation
+  const [suggestedNewCategory, setSuggestedNewCategory] = React.useState<string | null>(null);
+  const [creatingCategory, setCreatingCategory] = React.useState(false);
+
+  const defaultWallet = React.useMemo(() => {
+    return (
+      wallets.find((w) => w.isDefault && !w.isArchived) ||
+      wallets.find((w) => !w.isArchived) ||
+      wallets[0]
+    );
+  }, [wallets]);
+
   function initializeDefaults() {
     setType("expense");
     setAmountStr("0");
     setCurrency(userCurrency);
     setDateStr(new Date().toISOString().split("T")[0]);
-    const defaultCat = categories.find((c) => c.kind === "expense");
+    const defaultCat = localCategories.find((c) => c.kind === "expense" && !c.isArchived);
     if (defaultCat) setCategoryId(defaultCat.id);
-    if (wallets.length > 0) setWalletId(wallets[0].id);
+    if (defaultWallet) setWalletId(defaultWallet.id);
+    setSuggestedNewCategory(null);
+  }
+
+  function resolveCategoryMatch(rawSuggestion?: string) {
+    const raw = rawSuggestion?.trim();
+    if (!raw) {
+      const defaultCat = localCategories.find((c) => c.kind === "expense" && !c.isArchived);
+      if (defaultCat) setCategoryId(defaultCat.id);
+      setSuggestedNewCategory(null);
+      return;
+    }
+
+    const lowerRaw = raw.toLowerCase();
+    // 1. Exact match
+    const exactMatch = localCategories.find(
+      (c) => c.name.toLowerCase() === lowerRaw && !c.isArchived
+    );
+    if (exactMatch) {
+      setCategoryId(exactMatch.id);
+      setSuggestedNewCategory(null);
+      return;
+    }
+
+    // 2. Substring match
+    const subMatch = localCategories.find(
+      (c) =>
+        !c.isArchived &&
+        (c.name.toLowerCase().includes(lowerRaw) || lowerRaw.includes(c.name.toLowerCase()))
+    );
+    if (subMatch) {
+      setCategoryId(subMatch.id);
+      setSuggestedNewCategory(null);
+      return;
+    }
+
+    // 3. Fallback to "Uncategorized" if available, else first expense category
+    const uncategorized = localCategories.find(
+      (c) => c.name.toLowerCase() === "uncategorized" && !c.isArchived
+    );
+    if (uncategorized) {
+      setCategoryId(uncategorized.id);
+    } else {
+      const defaultCat = localCategories.find((c) => c.kind === "expense" && !c.isArchived);
+      if (defaultCat) setCategoryId(defaultCat.id);
+    }
+
+    // Prompt user to create the suggested category
+    setSuggestedNewCategory(raw);
+  }
+
+  async function handleQuickCreateSuggestedCategory(catName: string) {
+    if (!catName.trim() || creatingCategory) return;
+    setCreatingCategory(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: catName.trim(),
+          kind: type,
+          icon: "receipt",
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to create category");
+      }
+
+      const created: Category = data.category;
+      setLocalCategories((prev) => [...prev, created]);
+      setCategoryId(created.id);
+      setSuggestedNewCategory(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error creating category");
+    } finally {
+      setCreatingCategory(false);
+    }
   }
 
   async function handleFileSelect(file: File) {
@@ -124,21 +218,11 @@ export function ReceiptScanner({
       setCurrency(ext.currency || userCurrency);
       setDateStr(ext.date || new Date().toISOString().split("T")[0]);
 
-      // Match category suggestion to closest user category
-      const matchedCat = categories.find(
-        (c) =>
-          c.name.toLowerCase().includes(ext.category_suggestion.toLowerCase()) ||
-          ext.category_suggestion.toLowerCase().includes(c.name.toLowerCase())
-      );
-      if (matchedCat) {
-        setCategoryId(matchedCat.id);
-      } else {
-        const defaultCat = categories.find((c) => c.kind === "expense");
-        if (defaultCat) setCategoryId(defaultCat.id);
-      }
+      // Resolve category match against user custom and shared categories
+      resolveCategoryMatch(ext.category_suggestion);
 
-      if (wallets.length > 0) {
-        setWalletId(wallets[0].id);
+      if (defaultWallet) {
+        setWalletId(defaultWallet.id);
       }
 
       if (data.fallbackUsed && data.message) {
@@ -192,14 +276,7 @@ export function ReceiptScanner({
       setCurrency(ext.currency || userCurrency);
       setDateStr(ext.date || new Date().toISOString().split("T")[0]);
 
-      const matchedCat = categories.find(
-        (c) =>
-          c.name.toLowerCase().includes(ext.category_suggestion.toLowerCase()) ||
-          ext.category_suggestion.toLowerCase().includes(c.name.toLowerCase())
-      );
-      if (matchedCat) {
-        setCategoryId(matchedCat.id);
-      }
+      resolveCategoryMatch(ext.category_suggestion);
 
       setAllModelsFailed(false);
       setStatusNotice(null);
@@ -547,6 +624,23 @@ export function ReceiptScanner({
                   </Field>
                 </div>
 
+                {suggestedNewCategory && (
+                  <div className="p-3 rounded-btn bg-neo-yellow/20 border-2 border-border flex items-center justify-between gap-2 shadow-neo-sm">
+                    <div className="text-xs font-bold text-ink truncate">
+                      AI suggested category: <span className="underline">&quot;{suggestedNewCategory}&quot;</span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      onClick={() => handleQuickCreateSuggestedCategory(suggestedNewCategory)}
+                      disabled={creatingCategory}
+                    >
+                      {creatingCategory ? "Creating..." : "+ Create Category"}
+                    </Button>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="Category" required>
                     <Select
@@ -554,25 +648,29 @@ export function ReceiptScanner({
                       onChange={(e) => setCategoryId(e.target.value)}
                       required
                     >
-                      {categories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name} ({c.kind})
-                        </option>
-                      ))}
+                      {localCategories
+                        .filter((c) => !c.isArchived || c.id === categoryId)
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {getCategoryIconSymbol(c.icon)} {c.name} ({c.kind})
+                          </option>
+                        ))}
                     </Select>
                   </Field>
 
-                  <Field label="Wallet Account" required>
+                  <Field label="Account" required>
                     <Select
                       value={walletId}
                       onChange={(e) => setWalletId(e.target.value)}
                       required
                     >
-                      {wallets.map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.name} ({w.type})
-                        </option>
-                      ))}
+                      {wallets
+                        .filter((w) => !w.isArchived || w.id === walletId)
+                        .map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.name} ({w.currency || userCurrency} - {w.type}){w.isDefault ? " [Default]" : ""}
+                          </option>
+                        ))}
                     </Select>
                   </Field>
                 </div>

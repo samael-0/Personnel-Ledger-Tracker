@@ -80,7 +80,7 @@ export const verifications = pgTable("verification", {
 });
 
 // ==========================================
-// TRANSACTIONS & WALLETS (Phase 2)
+// TRANSACTIONS & WALLETS / ACCOUNTS (Phase 2 & 7)
 // ==========================================
 
 export const categories = pgTable("categories", {
@@ -88,6 +88,19 @@ export const categories = pgTable("categories", {
   userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   kind: text("kind").notNull(), // 'income' | 'expense'
+  icon: text("icon"), // preset icon identifier e.g. 'cart', 'food', 'salary'
+  isArchived: boolean("is_archived").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const userHiddenCategories = pgTable("user_hidden_categories", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  categoryId: text("category_id")
+    .notNull()
+    .references(() => categories.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -97,9 +110,16 @@ export const wallets = pgTable("wallets", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  type: text("type").notNull(), // 'cash' | 'bank' | 'mobile_wallet' | 'other'
+  type: text("type").notNull(), // 'bank' | 'cash' | 'mobile_wallet' | 'card' | 'other'
   currency: text("currency").notNull().default("USD"),
+  openingBalanceMinor: integer("opening_balance_minor").notNull().default(0),
+  isDefault: boolean("is_default").notNull().default(false),
+  isArchived: boolean("is_archived").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  accountNumberLast4: text("account_number_last_4"),
+  note: text("note"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export const receipts = pgTable("receipts", {
@@ -120,15 +140,16 @@ export const transactions = pgTable("transactions", {
   userId: text("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
-  type: text("type").notNull(), // 'income' | 'expense'
+  type: text("type").notNull(), // 'income' | 'expense' | 'transfer'
   amountMinor: integer("amount_minor").notNull(),
   currency: text("currency").notNull().default("USD"),
-  categoryId: text("category_id")
-    .notNull()
-    .references(() => categories.id),
+  categoryId: text("category_id").references(() => categories.id), // Nullable for transfers
   walletId: text("wallet_id")
     .notNull()
-    .references(() => wallets.id),
+    .references(() => wallets.id), // From account
+  toWalletId: text("to_wallet_id").references(() => wallets.id), // Destination account for transfers
+  toAmountMinor: integer("to_amount_minor"), // Destination amount if currencies differ
+  transferFeeMinor: integer("transfer_fee_minor").default(0),
   merchant: text("merchant").notNull(),
   note: text("note"),
   occurredAt: timestamp("occurred_at").notNull().defaultNow(),
@@ -194,4 +215,3 @@ export const investmentEvents = pgTable("investment_events", {
   note: text("note"),
   occurredAt: timestamp("occurred_at").notNull().defaultNow(),
 });
-

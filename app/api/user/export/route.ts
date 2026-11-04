@@ -3,6 +3,9 @@ import { getServerSession } from "@/lib/session";
 import { db } from "@/db";
 import { transactions, categories, wallets } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+
+const toWallets = alias(wallets, "to_wallets");
 
 export async function GET() {
   try {
@@ -18,15 +21,19 @@ export async function GET() {
         type: transactions.type,
         amountMinor: transactions.amountMinor,
         currency: transactions.currency,
+        toAmountMinor: transactions.toAmountMinor,
+        transferFeeMinor: transactions.transferFeeMinor,
         merchant: transactions.merchant,
         categoryName: categories.name,
-        walletName: wallets.name,
+        fromAccountName: wallets.name,
+        toAccountName: toWallets.name,
         source: transactions.source,
         note: transactions.note,
       })
       .from(transactions)
       .leftJoin(categories, eq(transactions.categoryId, categories.id))
       .leftJoin(wallets, eq(transactions.walletId, wallets.id))
+      .leftJoin(toWallets, eq(transactions.toWalletId, toWallets.id))
       .where(eq(transactions.userId, session.user.id))
       .orderBy(desc(transactions.occurredAt));
 
@@ -34,12 +41,15 @@ export async function GET() {
       "ID",
       "Date",
       "Type",
-      "Merchant",
+      "Merchant / Description",
       "Amount Minor",
       "Amount Decimal",
       "Currency",
       "Category",
-      "Wallet",
+      "Source Account",
+      "Destination Account",
+      "Destination Amount Decimal",
+      "Transfer Fee",
       "Source",
       "Note",
     ];
@@ -58,8 +68,21 @@ export async function GET() {
       escapeCsv(tx.amountMinor.toString()),
       escapeCsv((tx.amountMinor / 100).toFixed(2)),
       escapeCsv(tx.currency),
-      escapeCsv(tx.categoryName || "Uncategorized"),
-      escapeCsv(tx.walletName || "Default"),
+      escapeCsv(
+        tx.type === "transfer" ? "Transfer" : tx.categoryName || "Uncategorized"
+      ),
+      escapeCsv(tx.fromAccountName || "Default Account"),
+      escapeCsv(tx.type === "transfer" ? tx.toAccountName || "N/A" : ""),
+      escapeCsv(
+        tx.toAmountMinor !== null && tx.toAmountMinor !== undefined
+          ? (tx.toAmountMinor / 100).toFixed(2)
+          : ""
+      ),
+      escapeCsv(
+        tx.transferFeeMinor
+          ? (tx.transferFeeMinor / 100).toFixed(2)
+          : "0.00"
+      ),
       escapeCsv(tx.source),
       escapeCsv(tx.note || ""),
     ]);
@@ -80,4 +103,3 @@ export async function GET() {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

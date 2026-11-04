@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signOut } from "@/lib/auth-client";
 import { Button } from "@/components/ui/Button";
@@ -260,6 +261,35 @@ export function ProfileView({ user }: ProfileViewProps) {
             </Button>
           </div>
         </form>
+      </div>
+
+      {/* FINANCE CONFIGURATION */}
+      <div className="bg-surface rounded-card border-2 border-border p-5 sm:p-6 shadow-neo-sm space-y-4">
+        <h2 className="text-sm font-extrabold text-ink border-b-2 border-border pb-3">
+          Finance Management
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Link
+            href="/accounts"
+            className="p-3.5 rounded-btn border-2 border-border bg-surface-subtle hover:bg-neo-yellow/20 transition-all flex items-center justify-between shadow-neo-sm"
+          >
+            <div>
+              <span className="text-xs font-black text-ink block">Accounts & Balances</span>
+              <span className="text-[11px] text-muted font-medium">Banks, cash, and digital cards</span>
+            </div>
+            <span className="text-base font-black text-ink">→</span>
+          </Link>
+          <Link
+            href="/transactions?tab=meta"
+            className="p-3.5 rounded-btn border-2 border-border bg-surface-subtle hover:bg-neo-cyan/20 transition-all flex items-center justify-between shadow-neo-sm"
+          >
+            <div>
+              <span className="text-xs font-black text-ink block">Custom Categories</span>
+              <span className="text-[11px] text-muted font-medium">Icons, merge, and hide defaults</span>
+            </div>
+            <span className="text-base font-black text-ink">→</span>
+          </Link>
+        </div>
       </div>
 
       {/* DATA EXPORT */}

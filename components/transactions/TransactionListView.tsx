@@ -12,17 +12,23 @@ import {
   type Wallet,
 } from "./TransactionSheet";
 import { formatMoney } from "@/lib/money";
+import { getCategoryIconSymbol } from "@/lib/data/category-icons";
 
 export interface TransactionRecord {
   id: string;
   userId: string;
-  type: "income" | "expense";
+  type: "income" | "expense" | "transfer";
   amountMinor: number;
   currency: string;
-  categoryId: string;
+  categoryId?: string | null;
   categoryName?: string | null;
+  categoryIcon?: string | null;
   walletId: string;
   walletName?: string | null;
+  toWalletId?: string | null;
+  toWalletName?: string | null;
+  toAmountMinor?: number | null;
+  transferFeeMinor?: number | null;
   merchant: string;
   note?: string | null;
   occurredAt: string | Date;
@@ -108,7 +114,7 @@ export function TransactionListView({
             Transaction Ledger
           </h1>
           <p className="text-xs font-medium text-muted mt-0.5">
-            Exact minor units recorded in {userCurrency}
+            Exact minor units recorded across accounts in {userCurrency}
           </p>
         </div>
         <Button
@@ -130,7 +136,7 @@ export function TransactionListView({
           <div className="sm:col-span-1">
             <Input
               type="text"
-              placeholder="Search merchant or notes..."
+              placeholder="Search merchant, notes..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -140,9 +146,10 @@ export function TransactionListView({
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
             >
-              <option value="all">All Types (+/-)</option>
+              <option value="all">All Types (+ / - / ⇄)</option>
               <option value="expense">Expense Only (-)</option>
               <option value="income">Income Only (+)</option>
+              <option value="transfer">Transfer Only (⇄)</option>
             </Select>
           </div>
           <div>
@@ -153,7 +160,7 @@ export function TransactionListView({
               <option value="all">All Categories</option>
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name}
+                  {getCategoryIconSymbol(c.icon)} {c.name}
                 </option>
               ))}
             </Select>
@@ -163,10 +170,10 @@ export function TransactionListView({
               value={walletFilter}
               onChange={(e) => setWalletFilter(e.target.value)}
             >
-              <option value="all">All Wallets</option>
+              <option value="all">All Accounts</option>
               {wallets.map((w) => (
                 <option key={w.id} value={w.id}>
-                  {w.name}
+                  {w.name} ({w.currency})
                 </option>
               ))}
             </Select>
@@ -192,13 +199,15 @@ export function TransactionListView({
       ) : (
         <div className="space-y-4">
           {groupedByDay.map(([dateStr, items]) => {
-            const dayNetMinor = items.reduce(
-              (acc, curr) =>
-                curr.type === "income"
-                  ? acc + curr.amountMinor
-                  : acc - curr.amountMinor,
-              0
-            );
+            // Day net excludes transfers except for transfer fees
+            const dayNetMinor = items.reduce((acc, curr) => {
+              if (curr.type === "income") return acc + curr.amountMinor;
+              if (curr.type === "expense") return acc - curr.amountMinor;
+              if (curr.type === "transfer" && curr.transferFeeMinor) {
+                return acc - curr.transferFeeMinor;
+              }
+              return acc;
+            }, 0);
 
             return (
               <div
@@ -229,6 +238,9 @@ export function TransactionListView({
                 <div className="divide-y-2 divide-border">
                   {items.map((tx) => {
                     const isExpense = tx.type === "expense";
+                    const isIncome = tx.type === "income";
+                    const isTransfer = tx.type === "transfer";
+
                     return (
                       <div
                         key={tx.id}
@@ -258,12 +270,25 @@ export function TransactionListView({
                               </button>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 mt-1.5 text-xs text-muted">
-                            <span className="bg-surface-subtle border border-border px-2 py-0.5 rounded-pill text-[11px] font-bold text-ink">
-                              {tx.categoryName || "Uncategorized"}
-                            </span>
-                            <span>•</span>
-                            <span className="font-medium">{tx.walletName || "Default Wallet"}</span>
+
+                          <div className="flex items-center gap-2 mt-1.5 text-xs text-muted flex-wrap">
+                            {isTransfer ? (
+                              <span className="bg-neo-yellow/30 border border-border px-2 py-0.5 rounded-pill text-[11px] font-bold text-ink">
+                                ⇄ {tx.walletName || "Account"} → {tx.toWalletName || "Destination"}
+                              </span>
+                            ) : (
+                              <>
+                                <span className="bg-surface-subtle border border-border px-2 py-0.5 rounded-pill text-[11px] font-bold text-ink">
+                                  {getCategoryIconSymbol(tx.categoryIcon)}{" "}
+                                  {tx.categoryName || "Uncategorized"}
+                                </span>
+                                <span>•</span>
+                                <span className="font-bold text-ink">
+                                  {tx.walletName || "Default Account"}
+                                </span>
+                              </>
+                            )}
+
                             {tx.note && (
                               <>
                                 <span>•</span>
@@ -275,22 +300,34 @@ export function TransactionListView({
                           </div>
                         </div>
 
-                        {/* AMOUNT WITH +/- SIGN AND TEXT LABEL */}
+                        {/* AMOUNT WITH +/- OR ⇄ SIGN AND TEXT LABEL */}
                         <div className="text-right shrink-0">
                           <div
                             className={`text-sm sm:text-base font-extrabold font-mono font-tabular ${
-                              isExpense ? "text-danger" : "text-accent"
+                              isExpense
+                                ? "text-danger"
+                                : isIncome
+                                ? "text-accent"
+                                : "text-ink"
                             }`}
                           >
-                            {isExpense ? "-" : "+"}
+                            {isExpense ? "-" : isIncome ? "+" : "⇄ "}
                             {formatMoney(tx.amountMinor, tx.currency)}
                           </div>
                           <div
                             className={`text-[10px] font-bold mt-0.5 ${
-                              isExpense ? "text-danger" : "text-accent"
+                              isExpense
+                                ? "text-danger"
+                                : isIncome
+                                ? "text-accent"
+                                : "text-muted"
                             }`}
                           >
-                            {isExpense ? "Expense (-)" : "Income (+)"}
+                            {isExpense
+                              ? "Expense (-)"
+                              : isIncome
+                              ? "Income (+)"
+                              : "Transfer (⇄)"}
                           </div>
                         </div>
                       </div>

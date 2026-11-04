@@ -7,11 +7,17 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Field } from "@/components/ui/Field";
 import { getCurrencyMeta, parseToMinorUnits } from "@/lib/money";
+import {
+  CATEGORY_ICON_PRESETS,
+  getCategoryIconSymbol,
+} from "@/lib/data/category-icons";
 
 export interface Category {
   id: string;
   name: string;
   kind: "income" | "expense";
+  icon?: string | null;
+  isArchived?: boolean;
 }
 
 export interface Wallet {
@@ -19,15 +25,21 @@ export interface Wallet {
   name: string;
   type: string;
   currency: string;
+  isDefault?: boolean;
+  isArchived?: boolean;
+  currentBalanceMinor?: number;
 }
 
 export interface TransactionItem {
   id?: string;
-  type: "income" | "expense";
+  type: "income" | "expense" | "transfer";
   amountMinor: number;
   currency: string;
-  categoryId: string;
+  categoryId?: string | null;
   walletId: string;
+  toWalletId?: string | null;
+  toAmountMinor?: number | null;
+  transferFeeMinor?: number | null;
   merchant: string;
   note?: string | null;
   occurredAt: string | Date;
@@ -41,22 +53,27 @@ interface TransactionSheetProps {
   wallets: Wallet[];
   userCurrency: string;
   initialTransaction?: TransactionItem | null;
+  onCategoryCreated?: (newCategory: Category) => void;
 }
 
 export function TransactionSheet({
   isOpen,
   onClose,
   onSaved,
-  categories,
+  categories: initialCategories,
   wallets,
   userCurrency,
   initialTransaction,
+  onCategoryCreated,
 }: TransactionSheetProps) {
-  const [type, setType] = React.useState<"income" | "expense">("expense");
+  const [type, setType] = React.useState<"income" | "expense" | "transfer">("expense");
   const [amountStr, setAmountStr] = React.useState("0");
+  const [toAmountStr, setToAmountStr] = React.useState("");
+  const [transferFeeStr, setTransferFeeStr] = React.useState("");
   const [merchant, setMerchant] = React.useState("");
   const [categoryId, setCategoryId] = React.useState("");
   const [walletId, setWalletId] = React.useState("");
+  const [toWalletId, setToWalletId] = React.useState("");
   const [dateStr, setDateStr] = React.useState(
     () => new Date().toISOString().split("T")[0]
   );
@@ -64,28 +81,91 @@ export function TransactionSheet({
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
+  // Categories list with live additions
+  const [localCategories, setLocalCategories] = React.useState<Category[]>(initialCategories);
+
+  React.useEffect(() => {
+    setLocalCategories(initialCategories);
+  }, [initialCategories]);
+
+  // Inline "Add new category" modal state
+  const [showAddCategory, setShowAddCategory] = React.useState(false);
+  const [newCatName, setNewCatName] = React.useState("");
+  const [newCatIcon, setNewCatIcon] = React.useState("food");
+  const [savingCategory, setSavingCategory] = React.useState(false);
+
+  // Find default account
+  const defaultWallet = React.useMemo(() => {
+    return wallets.find((w) => w.isDefault && !w.isArchived) || wallets.find((w) => !w.isArchived) || wallets[0];
+  }, [wallets]);
+
   // Sync state when editing or opening
   React.useEffect(() => {
     if (initialTransaction) {
       setType(initialTransaction.type);
       setAmountStr((initialTransaction.amountMinor / 100).toString());
+      setToAmountStr(
+        initialTransaction.toAmountMinor
+          ? (initialTransaction.toAmountMinor / 100).toString()
+          : ""
+      );
+      setTransferFeeStr(
+        initialTransaction.transferFeeMinor
+          ? (initialTransaction.transferFeeMinor / 100).toString()
+          : ""
+      );
       setMerchant(initialTransaction.merchant);
-      setCategoryId(initialTransaction.categoryId);
+      setCategoryId(initialTransaction.categoryId || "");
       setWalletId(initialTransaction.walletId);
+      setToWalletId(initialTransaction.toWalletId || "");
       const d = new Date(initialTransaction.occurredAt);
       setDateStr(d.toISOString().split("T")[0]);
       setNote(initialTransaction.note || "");
     } else {
       setType("expense");
       setAmountStr("0");
+      setToAmountStr("");
+      setTransferFeeStr("");
       setMerchant("");
       setDateStr(new Date().toISOString().split("T")[0]);
       setNote("");
-      const filtered = categories.filter((c) => c.kind === "expense");
-      if (filtered.length > 0) setCategoryId(filtered[0].id);
-      if (wallets.length > 0) setWalletId(wallets[0].id);
+
+      const activeCategories = localCategories.filter((c) => c.kind === "expense" && !c.isArchived);
+      if (activeCategories.length > 0) setCategoryId(activeCategories[0].id);
+
+      if (defaultWallet) {
+        setWalletId(defaultWallet.id);
+      }
+      // For transfer, pick a second distinct account as destination
+      const otherAccount = wallets.find((w) => !w.isArchived && w.id !== defaultWallet?.id);
+      if (otherAccount) {
+        setToWalletId(otherAccount.id);
+      }
     }
-  }, [initialTransaction, isOpen, categories, wallets]);
+  }, [initialTransaction, isOpen, wallets, defaultWallet]);
+
+  // Active accounts (exclude archived unless currently selected)
+  const availableWallets = React.useMemo(() => {
+    return wallets.filter((w) => !w.isArchived || w.id === walletId || w.id === toWalletId);
+  }, [wallets, walletId, toWalletId]);
+
+  // Current selected account objects
+  const selectedSourceWallet = wallets.find((w) => w.id === walletId);
+  const selectedDestWallet = wallets.find((w) => w.id === toWalletId);
+
+  const isCrossCurrency =
+    type === "transfer" &&
+    selectedSourceWallet &&
+    selectedDestWallet &&
+    selectedSourceWallet.currency !== selectedDestWallet.currency;
+
+  // Active categories for the current kind
+  const availableCategories = React.useMemo(() => {
+    if (type === "transfer") return [];
+    return localCategories.filter(
+      (c) => c.kind === type && (!c.isArchived || c.id === categoryId)
+    );
+  }, [localCategories, type, categoryId]);
 
   // Keypad button handler
   function handleKeyPress(char: string) {
@@ -110,7 +190,6 @@ export function TransactionSheet({
     if (amountStr === "0") {
       setAmountStr(char);
     } else {
-      // Limit to 2 decimal places
       if (amountStr.includes(".")) {
         const parts = amountStr.split(".");
         if (parts[1] && parts[1].length >= 2) return;
@@ -121,45 +200,126 @@ export function TransactionSheet({
     }
   }
 
-  const currencyMeta = getCurrencyMeta(userCurrency);
-  const availableCategories = categories.filter((c) => c.kind === type);
+  // Handle Quick Category Add inline without leaving flow
+  async function handleCreateCategoryInline(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newCatName.trim()) return;
+
+    setSavingCategory(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newCatName.trim(),
+          kind: type === "transfer" ? "expense" : type,
+          icon: newCatIcon,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to create category");
+      }
+
+      const created: Category = data.category;
+      setLocalCategories((prev) => [...prev, created]);
+      setCategoryId(created.id);
+      onCategoryCreated?.(created);
+      setShowAddCategory(false);
+      setNewCatName("");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error creating category");
+    } finally {
+      setSavingCategory(false);
+    }
+  }
+
+  const currencyMeta = getCurrencyMeta(selectedSourceWallet?.currency || userCurrency);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    const amountMinor = parseToMinorUnits(amountStr, userCurrency);
+    const amountMinor = parseToMinorUnits(amountStr, selectedSourceWallet?.currency || userCurrency);
     if (amountMinor <= 0) {
       setError("Please enter a valid amount greater than zero.");
       return;
     }
-    if (!merchant.trim()) {
-      setError("Please enter a merchant or description.");
-      return;
-    }
-    if (!categoryId) {
-      setError("Please choose a category.");
-      return;
-    }
+
     if (!walletId) {
-      setError("Please choose a wallet or payment method.");
+      setError("Please select a source account.");
       return;
+    }
+
+    let toAmountMinor: number | null = null;
+    let transferFeeMinor = 0;
+
+    if (type === "transfer") {
+      if (!toWalletId) {
+        setError("Please select a destination account.");
+        return;
+      }
+      if (walletId === toWalletId) {
+        setError("Transfer source and destination account cannot be the same.");
+        return;
+      }
+
+      if (isCrossCurrency) {
+        if (!toAmountStr.trim()) {
+          setError(
+            `Please specify the destination amount in ${selectedDestWallet?.currency}.`
+          );
+          return;
+        }
+        toAmountMinor = parseToMinorUnits(
+          toAmountStr,
+          selectedDestWallet?.currency || userCurrency
+        );
+        if (toAmountMinor <= 0) {
+          setError("Destination amount must be greater than zero.");
+          return;
+        }
+      }
+
+      if (transferFeeStr.trim()) {
+        transferFeeMinor = parseToMinorUnits(
+          transferFeeStr,
+          selectedSourceWallet?.currency || userCurrency
+        );
+      }
+    } else {
+      if (!categoryId) {
+        setError("Please choose a category.");
+        return;
+      }
+      if (!merchant.trim()) {
+        setError("Please enter a merchant or description.");
+        return;
+      }
     }
 
     setLoading(true);
 
     try {
-      const payload = {
+      const payload: TransactionItem = {
         id: initialTransaction?.id,
         type,
         amountMinor,
-        currency: userCurrency,
-        categoryId,
+        currency: selectedSourceWallet?.currency || userCurrency,
+        categoryId: type === "transfer" ? null : categoryId,
         walletId,
-        merchant: merchant.trim(),
+        toWalletId: type === "transfer" ? toWalletId : null,
+        toAmountMinor: type === "transfer" ? toAmountMinor : null,
+        transferFeeMinor: type === "transfer" ? transferFeeMinor : 0,
+        merchant:
+          type === "transfer"
+            ? merchant.trim() || `Transfer to ${selectedDestWallet?.name || "Account"}`
+            : merchant.trim(),
         note: note.trim() || null,
         occurredAt: new Date(dateStr).toISOString(),
-        source: "manual",
       };
 
       const method = initialTransaction?.id ? "PUT" : "POST";
@@ -214,18 +374,18 @@ export function TransactionSheet({
       isOpen={isOpen}
       onClose={onClose}
       title={initialTransaction?.id ? "Edit Transaction" : "New Transaction"}
-      description="Rapid one-handed numeric entry in minor units."
+      description="One-handed entry with instant account balance calculation."
       variant="sheet"
     >
       <form onSubmit={handleSave} className="space-y-4">
         {error && (
-          <div className="p-3 bg-neo-coral/20 text-ink rounded-btn border-2 border-border font-bold text-xs shadow-neo-sm">
+          <div className="p-3.5 bg-neo-coral/20 text-ink rounded-btn border-2 border-border font-bold text-xs shadow-neo-sm">
             {error}
           </div>
         )}
 
-        {/* TYPE TOGGLE: INCOME / EXPENSE */}
-        <div className="grid grid-cols-2 p-1.5 bg-surface-subtle border-2 border-border rounded-btn shadow-neo-sm gap-1.5">
+        {/* TYPE TOGGLE: INCOME / EXPENSE / TRANSFER */}
+        <div className="grid grid-cols-3 p-1.5 bg-surface-subtle border-2 border-border rounded-btn shadow-neo-sm gap-1.5">
           <button
             type="button"
             onClick={() => setType("expense")}
@@ -248,6 +408,17 @@ export function TransactionSheet({
           >
             + Income
           </button>
+          <button
+            type="button"
+            onClick={() => setType("transfer")}
+            className={`py-2 text-xs font-bold rounded-control transition-all select-none ${
+              type === "transfer"
+                ? "bg-neo-yellow text-ink border-2 border-border shadow-neo-sm font-extrabold"
+                : "text-muted hover:text-ink"
+            }`}
+          >
+            ⇄ Transfer
+          </button>
         </div>
 
         {/* AMOUNT DISPLAY */}
@@ -257,10 +428,14 @@ export function TransactionSheet({
           </span>
           <span
             className={`text-3xl sm:text-4xl font-extrabold font-mono font-tabular tracking-tight ${
-              type === "expense" ? "text-danger" : "text-accent"
+              type === "expense"
+                ? "text-danger"
+                : type === "income"
+                ? "text-accent"
+                : "text-ink"
             }`}
           >
-            {type === "expense" ? "-" : "+"}
+            {type === "expense" ? "-" : type === "income" ? "+" : "⇄ "}
             {amountStr}
           </span>
           <button
@@ -288,63 +463,200 @@ export function TransactionSheet({
           )}
         </div>
 
-        {/* METADATA FIELDS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-          <Field label="Merchant or Description" required>
-            <Input
-              type="text"
-              placeholder="e.g. Grocery Store, Client Inc"
-              value={merchant}
-              onChange={(e) => setMerchant(e.target.value)}
-              required
-            />
-          </Field>
+        {/* TRANSFER FIELDS */}
+        {type === "transfer" ? (
+          <div className="space-y-3 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="From Account" required>
+                <Select
+                  value={walletId}
+                  onChange={(e) => setWalletId(e.target.value)}
+                  required
+                >
+                  {availableWallets.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name} ({w.currency})
+                    </option>
+                  ))}
+                </Select>
+              </Field>
 
-          <Field label="Category" required>
-            <Select
-              value={categoryId}
-              onChange={(e) => setCategoryId(e.target.value)}
-              required
-            >
-              {availableCategories.length === 0 ? (
-                <option value="">No categories found</option>
-              ) : (
-                availableCategories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))
-              )}
-            </Select>
-          </Field>
+              <Field label="To Account" required>
+                <Select
+                  value={toWalletId}
+                  onChange={(e) => setToWalletId(e.target.value)}
+                  required
+                >
+                  {availableWallets.map((w) => (
+                    <option key={w.id} value={w.id} disabled={w.id === walletId}>
+                      {w.name} ({w.currency}) {w.id === walletId ? "(Source)" : ""}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
 
-          <Field label="Wallet / Account" required>
-            <Select
-              value={walletId}
-              onChange={(e) => setWalletId(e.target.value)}
-              required
-            >
-              {wallets.length === 0 ? (
-                <option value="">No wallets found</option>
-              ) : (
-                wallets.map((w) => (
+            {/* Cross-Currency Amount input */}
+            {isCrossCurrency && (
+              <div className="p-3.5 rounded-btn bg-neo-yellow/20 border-2 border-border space-y-2 shadow-neo-sm">
+                <span className="text-xs font-extrabold text-ink block">
+                  Cross-Currency Transfer Detected
+                </span>
+                <p className="text-[11px] text-muted font-medium">
+                  Transferring from {selectedSourceWallet?.currency} to{" "}
+                  {selectedDestWallet?.currency}. Enter the destination credit amount.
+                </p>
+                <Field
+                  label={`Destination Received (${selectedDestWallet?.currency})`}
+                  required
+                >
+                  <Input
+                    type="text"
+                    placeholder="e.g. 1500.00"
+                    value={toAmountStr}
+                    onChange={(e) => setToAmountStr(e.target.value)}
+                    required
+                  />
+                </Field>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Transfer Fee (Optional)">
+                <Input
+                  type="text"
+                  placeholder="0.00"
+                  value={transferFeeStr}
+                  onChange={(e) => setTransferFeeStr(e.target.value)}
+                />
+              </Field>
+
+              <Field label="Date" required>
+                <Input
+                  type="date"
+                  value={dateStr}
+                  onChange={(e) => setDateStr(e.target.value)}
+                  required
+                />
+              </Field>
+            </div>
+
+            <Field label="Transfer Description">
+              <Input
+                type="text"
+                placeholder={
+                  selectedDestWallet
+                    ? `Transfer to ${selectedDestWallet.name}`
+                    : "Account Transfer"
+                }
+                value={merchant}
+                onChange={(e) => setMerchant(e.target.value)}
+              />
+            </Field>
+          </div>
+        ) : (
+          /* STANDARD INCOME / EXPENSE FIELDS */
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <Field label="Account (Source/Target)" required>
+              <Select
+                value={walletId}
+                onChange={(e) => setWalletId(e.target.value)}
+                required
+              >
+                {availableWallets.map((w) => (
                   <option key={w.id} value={w.id}>
-                    {w.name} ({w.type})
+                    {w.name} ({w.type} / {w.currency}) {w.isDefault ? "★ Default" : ""}
                   </option>
-                ))
-              )}
-            </Select>
-          </Field>
+                ))}
+              </Select>
+            </Field>
 
-          <Field label="Date" required>
-            <Input
-              type="date"
-              value={dateStr}
-              onChange={(e) => setDateStr(e.target.value)}
-              required
-            />
-          </Field>
-        </div>
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-bold text-ink">Category *</label>
+                <button
+                  type="button"
+                  onClick={() => setShowAddCategory(!showAddCategory)}
+                  className="text-[11px] font-extrabold text-accent hover:underline flex items-center gap-1"
+                >
+                  {showAddCategory ? "Close" : "+ New"}
+                </button>
+              </div>
+
+              {showAddCategory ? (
+                <div className="p-3 rounded-btn border-2 border-border bg-surface-subtle shadow-neo-sm space-y-2 mb-2">
+                  <span className="text-[11px] font-extrabold text-ink block">
+                    Quick Category Add ({type})
+                  </span>
+                  <Input
+                    type="text"
+                    placeholder="Category name..."
+                    value={newCatName}
+                    onChange={(e) => setNewCatName(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={newCatIcon}
+                      onChange={(e) => setNewCatIcon(e.target.value)}
+                      className="text-xs py-1 flex-1"
+                    >
+                      {CATEGORY_ICON_PRESETS.map((icon) => (
+                        <option key={icon.id} value={icon.id}>
+                          {icon.symbol} {icon.label}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      onClick={handleCreateCategoryInline}
+                      disabled={savingCategory || !newCatName.trim()}
+                    >
+                      {savingCategory ? "Adding..." : "Save"}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Select
+                  value={categoryId}
+                  onChange={(e) => setCategoryId(e.target.value)}
+                  required
+                >
+                  {availableCategories.length === 0 ? (
+                    <option value="">No categories found</option>
+                  ) : (
+                    availableCategories.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {getCategoryIconSymbol(c.icon)} {c.name}
+                      </option>
+                    ))
+                  )}
+                </Select>
+              )}
+            </div>
+
+            <Field label="Merchant or Description" required>
+              <Input
+                type="text"
+                placeholder="e.g. Grocery Store, Client Inc"
+                value={merchant}
+                onChange={(e) => setMerchant(e.target.value)}
+                required
+              />
+            </Field>
+
+            <Field label="Date" required>
+              <Input
+                type="date"
+                value={dateStr}
+                onChange={(e) => setDateStr(e.target.value)}
+                required
+              />
+            </Field>
+          </div>
+        )}
 
         <Field label="Optional Note">
           <Input
@@ -381,7 +693,9 @@ export function TransactionSheet({
               ? "Update Entry"
               : type === "expense"
               ? "Record Expense (-)"
-              : "Record Income (+)"}
+              : type === "income"
+              ? "Record Income (+)"
+              : "Record Transfer (⇄)"}
           </Button>
         </div>
       </form>

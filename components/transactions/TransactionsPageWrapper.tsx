@@ -26,6 +26,15 @@ export function TransactionsPageWrapper({
   const [categories, setCategories] = React.useState(initCategories);
   const [wallets, setWallets] = React.useState(initWallets);
 
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("tab") === "meta") {
+        setActiveTab("meta");
+      }
+    }
+  }, []);
+
   const refreshMeta = React.useCallback(async () => {
     try {
       const [catRes, walRes] = await Promise.all([
