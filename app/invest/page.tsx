@@ -1,0 +1,61 @@
+import { requireAuth } from "@/lib/session";
+import { AppShell } from "@/components/AppShell";
+import { InvestmentsView } from "@/components/investments/InvestmentsView";
+import { db } from "@/db";
+import { investments, investmentEvents, users } from "@/db/schema";
+import { eq, desc } from "drizzle-orm";
+
+export default async function InvestPage() {
+  const session = await requireAuth();
+
+  let userCurrency = "USD";
+  let userInvestments: any[] = [];
+
+  try {
+    const user = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, session.user.id))
+      .limit(1);
+
+    if (user.length > 0 && user[0].currency) {
+      userCurrency = user[0].currency;
+    }
+
+    const items = await db
+      .select()
+      .from(investments)
+      .where(eq(investments.userId, session.user.id))
+      .orderBy(desc(investments.updatedAt));
+
+    const events = await db
+      .select()
+      .from(investmentEvents)
+      .where(eq(investmentEvents.userId, session.user.id))
+      .orderBy(desc(investmentEvents.occurredAt));
+
+    userInvestments = items.map((inv) => ({
+      ...inv,
+      events: events.filter((e) => e.investmentId === inv.id),
+    }));
+  } catch (e) {
+    console.warn("Investments DB query fallback:", e);
+  }
+
+  return (
+    <AppShell
+      user={{
+        name: session.user.name,
+        email: session.user.email,
+        currency: userCurrency,
+        image: session.user.image,
+      }}
+    >
+      <InvestmentsView
+        initialInvestments={userInvestments}
+        userCurrency={userCurrency}
+      />
+    </AppShell>
+  );
+}
+

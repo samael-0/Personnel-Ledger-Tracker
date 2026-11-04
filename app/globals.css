@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-ground: #FAF7F0;
+  --color-surface: #FFFFFF;
+  --color-surface-subtle: #F3EFE6;
+  --color-border: #18181B;
+  --color-ink: #18181B;
+  --color-muted: #71717A;
+  
+  /* Neo-brutalist Pastel Accent Palette from Reference */
+  --color-neo-yellow: #FFDE59;
+  --color-neo-cyan: #72DDF7;
+  --color-neo-purple: #BDB2FF;
+  --color-neo-coral: #FF70A6;
+  --color-neo-green: #22C55E;
+  
+  --color-accent: #FFDE59;
+  --color-accent-ink: #18181B;
+  
+  --radius-card: 20px;
+  --radius-btn: 16px;
+  --radius-pill: 9999px;
+  
+  --shadow-neo: 3px 3px 0px #18181B;
+  --shadow-neo-lg: 4px 4px 0px #18181B;
+  --shadow-neo-sm: 2px 2px 0px #18181B;
+}
+
+.dark {
+  --color-ground: #121316;
+  --color-surface: #1E2025;
+  --color-surface-subtle: #2A2D35;
+  --color-border: #000000;
+  --color-ink: #F4F4F5;
+  --color-muted: #A1A1AA;
+  
+  --color-neo-yellow: #FACC15;
+  --color-neo-cyan: #38BDF8;
+  --color-neo-purple: #A78BFA;
+  --color-neo-coral: #FB7185;
+  --color-neo-green: #4ADE80;
+  
+  --color-accent: #FACC15;
+  --color-accent-ink: #18181B;
+  
+  --shadow-neo: 3px 3px 0px #000000;
+  --shadow-neo-lg: 4px 4px 0px #000000;
+  --shadow-neo-sm: 2px 2px 0px #000000;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Accessible focus ring */
+:focus-visible {
+  outline: 2px solid var(--color-border) !important;
+  outline-offset: 2px !important;
+}
+
+/* Reduced motion respected */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
