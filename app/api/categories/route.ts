@@ -17,35 +17,60 @@ export async function GET(req: NextRequest) {
     const includeArchived = searchParams.get("includeArchived") === "true";
     const includeHidden = searchParams.get("includeHidden") === "true";
 
-    // 1. Fetch hidden category records for this user
-    const hiddenList = await db
-      .select({ categoryId: userHiddenCategories.categoryId })
-      .from(userHiddenCategories)
-      .where(eq(userHiddenCategories.userId, session.user.id));
+    // 1 & 2. Fetch hidden categories and categories in parallel
+    const [hiddenList, dbCategories] = await Promise.all([
+      db
+        .select({ categoryId: userHiddenCategories.categoryId })
+        .from(userHiddenCategories)
+        .where(eq(userHiddenCategories.userId, session.user.id)),
+      db
+        .select()
+        .from(categories)
+        .where(
+          or(eq(categories.userId, session.user.id), isNull(categories.userId))
+        ),
+    ]);
 
     const hiddenIds = new Set(hiddenList.map((h) => h.categoryId));
 
-    // 2. Fetch categories (shared defaults + user custom)
-    const dbCategories = await db
-      .select()
-      .from(categories)
-      .where(
-        or(eq(categories.userId, session.user.id), isNull(categories.userId))
-      );
-
     let allCategories = dbCategories;
 
-    // If database has no categories yet, populate with memory defaults
+    // If database has no categories yet, auto-seed with default categories
     if (allCategories.length === 0) {
-      allCategories = DEFAULT_CATEGORIES.map((c) => ({
-        id: c.id,
-        userId: null,
-        name: c.name,
-        kind: c.kind,
-        icon: null,
-        isArchived: false,
-        createdAt: new Date(),
-      }));
+      try {
+        await db
+          .insert(categories)
+          .values(
+            DEFAULT_CATEGORIES.map((c) => ({
+              id: c.id,
+              userId: null,
+              name: c.name,
+              kind: c.kind,
+              icon: c.icon,
+              isArchived: false,
+              createdAt: new Date(),
+            }))
+          )
+          .onConflictDoNothing();
+
+        allCategories = await db
+          .select()
+          .from(categories)
+          .where(
+            or(eq(categories.userId, session.user.id), isNull(categories.userId))
+          );
+      } catch (seedErr) {
+        console.warn("Failed to auto-seed default categories:", seedErr);
+        allCategories = DEFAULT_CATEGORIES.map((c) => ({
+          id: c.id,
+          userId: null,
+          name: c.name,
+          kind: c.kind,
+          icon: c.icon,
+          isArchived: false,
+          createdAt: new Date(),
+        }));
+      }
     }
 
     // 3. Mark hidden status and filter

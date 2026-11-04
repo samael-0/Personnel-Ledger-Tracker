@@ -1,0 +1,22 @@
+CREATE INDEX "account_user_id_idx" ON "account" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "categories_user_id_idx" ON "categories" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "categories_user_kind_idx" ON "categories" USING btree ("user_id","kind");--> statement-breakpoint
+CREATE INDEX "investment_events_user_idx" ON "investment_events" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "investment_events_inv_occurred_idx" ON "investment_events" USING btree ("investment_id","occurred_at");--> statement-breakpoint
+CREATE INDEX "investments_user_id_idx" ON "investments" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "investments_user_updated_idx" ON "investments" USING btree ("user_id","updated_at");--> statement-breakpoint
+CREATE INDEX "qr_codes_user_id_idx" ON "qr_codes" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "qr_codes_user_pinned_idx" ON "qr_codes" USING btree ("user_id","is_pinned","updated_at");--> statement-breakpoint
+CREATE INDEX "receipts_user_id_idx" ON "receipts" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "receipts_user_created_idx" ON "receipts" USING btree ("user_id","created_at");--> statement-breakpoint
+CREATE INDEX "session_user_id_idx" ON "session" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "session_token_idx" ON "session" USING btree ("token");--> statement-breakpoint
+CREATE INDEX "transactions_user_id_idx" ON "transactions" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "transactions_user_occurred_idx" ON "transactions" USING btree ("user_id","occurred_at");--> statement-breakpoint
+CREATE INDEX "transactions_user_wallet_idx" ON "transactions" USING btree ("user_id","wallet_id");--> statement-breakpoint
+CREATE INDEX "transactions_user_to_wallet_idx" ON "transactions" USING btree ("user_id","to_wallet_id");--> statement-breakpoint
+CREATE INDEX "transactions_user_category_idx" ON "transactions" USING btree ("user_id","category_id");--> statement-breakpoint
+CREATE INDEX "user_hidden_cat_user_idx" ON "user_hidden_categories" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "user_hidden_cat_user_cat_idx" ON "user_hidden_categories" USING btree ("user_id","category_id");--> statement-breakpoint
+CREATE INDEX "wallets_user_id_idx" ON "wallets" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "wallets_user_sort_idx" ON "wallets" USING btree ("user_id","sort_order","created_at");

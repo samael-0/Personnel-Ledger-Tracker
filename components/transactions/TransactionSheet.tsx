@@ -48,7 +48,7 @@ export interface TransactionItem {
 interface TransactionSheetProps {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (optimisticTx?: TransactionItem, action?: "add" | "edit" | "delete") => void;
   categories: Category[];
   wallets: Wallet[];
   userCurrency: string;
@@ -334,7 +334,7 @@ export function TransactionSheet({
         throw new Error(data.error || "Failed to record transaction");
       }
 
-      onSaved();
+      onSaved(payload, initialTransaction?.id ? "edit" : "add");
       onClose();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Error saving";
@@ -353,7 +353,7 @@ export function TransactionSheet({
         method: "DELETE",
       });
       if (!res.ok) throw new Error("Delete failed");
-      onSaved();
+      onSaved(initialTransaction, "delete");
       onClose();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Error deleting";

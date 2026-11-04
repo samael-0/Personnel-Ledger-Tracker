@@ -133,6 +133,7 @@ export function AppShell({ children, user }: AppShellProps) {
                 <Link
                   key={item.href}
                   href={item.href}
+                  prefetch={true}
                   className={`flex items-center gap-3 w-full px-4 py-3 rounded-btn text-sm font-extrabold border-2 transition-all ${
                     isActive
                       ? "bg-neo-yellow text-ink border-border shadow-neo"
@@ -228,6 +229,7 @@ export function AppShell({ children, user }: AppShellProps) {
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch={true}
                 className={`flex-1 py-2 px-1 rounded-btn flex flex-col items-center justify-center transition-all select-none ${
                   isActive
                     ? "bg-neo-yellow text-ink border-2 border-border shadow-neo-sm font-black"

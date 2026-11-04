@@ -15,6 +15,13 @@
       "when": 1793792506928,
       "tag": "0001_absent_snowbird",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793809475304,
+      "tag": "0002_icy_zeigeist",
+      "breakpoints": true
     }
   ]
 }

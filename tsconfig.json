@@ -7,6 +7,7 @@
       "esnext",
       "webworker"
     ],
+    "allowImportingTsExtensions": true,
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,

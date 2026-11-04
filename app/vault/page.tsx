@@ -4,6 +4,7 @@ import { VaultView } from "@/components/vault/VaultView";
 import { db } from "@/db";
 import { qrCodes, users } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
+import { timeQuery } from "@/lib/timing";
 
 export default async function VaultPage() {
   const session = await requireAuth();
@@ -12,30 +13,35 @@ export default async function VaultPage() {
   let userQrCodes: any[] = [];
 
   try {
-    const user = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, session.user.id))
-      .limit(1);
+    const [userRows, fetchedQrCodes] = await timeQuery("VaultPage:parallel-load", () =>
+      Promise.all([
+        db
+          .select({ currency: users.currency })
+          .from(users)
+          .where(eq(users.id, session.user.id))
+          .limit(1),
+        db
+          .select({
+            id: qrCodes.id,
+            name: qrCodes.name,
+            category: qrCodes.category,
+            note: qrCodes.note,
+            decodedText: qrCodes.decodedText,
+            isPinned: qrCodes.isPinned,
+            createdAt: qrCodes.createdAt,
+            updatedAt: qrCodes.updatedAt,
+          })
+          .from(qrCodes)
+          .where(eq(qrCodes.userId, session.user.id))
+          .orderBy(desc(qrCodes.isPinned), desc(qrCodes.updatedAt)),
+      ])
+    );
 
-    if (user.length > 0 && user[0].currency) {
-      userCurrency = user[0].currency;
+    if (userRows.length > 0 && userRows[0].currency) {
+      userCurrency = userRows[0].currency;
     }
 
-    userQrCodes = await db
-      .select({
-        id: qrCodes.id,
-        name: qrCodes.name,
-        category: qrCodes.category,
-        note: qrCodes.note,
-        decodedText: qrCodes.decodedText,
-        isPinned: qrCodes.isPinned,
-        createdAt: qrCodes.createdAt,
-        updatedAt: qrCodes.updatedAt,
-      })
-      .from(qrCodes)
-      .where(eq(qrCodes.userId, session.user.id))
-      .orderBy(desc(qrCodes.isPinned), desc(qrCodes.updatedAt));
+    userQrCodes = fetchedQrCodes;
   } catch (e) {
     console.warn("DB query fallback in vault page:", e);
   }
@@ -53,4 +59,3 @@ export default async function VaultPage() {
     </AppShell>
   );
 }
-

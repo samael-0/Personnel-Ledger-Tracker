@@ -5,6 +5,7 @@ import { getAccountsWithBalances } from "@/lib/data/accounts";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { timeQuery } from "@/lib/timing";
 
 export default async function AccountsPage() {
   const session = await requireAuth();
@@ -13,17 +14,21 @@ export default async function AccountsPage() {
   let userAccounts: any[] = [];
 
   try {
-    const user = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, session.user.id))
-      .limit(1);
+    const [userRows, data] = await timeQuery("AccountsPage:parallel-load", () =>
+      Promise.all([
+        db
+          .select({ currency: users.currency })
+          .from(users)
+          .where(eq(users.id, session.user.id))
+          .limit(1),
+        getAccountsWithBalances(session.user.id, true),
+      ])
+    );
 
-    if (user.length > 0 && user[0].currency) {
-      userCurrency = user[0].currency;
+    if (userRows.length > 0 && userRows[0].currency) {
+      userCurrency = userRows[0].currency;
     }
 
-    const data = await getAccountsWithBalances(session.user.id, true);
     userAccounts = data.accounts;
   } catch (err) {
     console.error("Accounts page load error:", err);
@@ -45,4 +50,3 @@ export default async function AccountsPage() {
     </AppShell>
   );
 }
-

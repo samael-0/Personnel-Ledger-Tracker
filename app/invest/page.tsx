@@ -4,6 +4,7 @@ import { InvestmentsView } from "@/components/investments/InvestmentsView";
 import { db } from "@/db";
 import { investments, investmentEvents, users } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
+import { timeQuery } from "@/lib/timing";
 
 export default async function InvestPage() {
   const session = await requireAuth();
@@ -12,27 +13,29 @@ export default async function InvestPage() {
   let userInvestments: any[] = [];
 
   try {
-    const user = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, session.user.id))
-      .limit(1);
+    const [userRows, items, events] = await timeQuery("InvestPage:parallel-load", () =>
+      Promise.all([
+        db
+          .select({ currency: users.currency })
+          .from(users)
+          .where(eq(users.id, session.user.id))
+          .limit(1),
+        db
+          .select()
+          .from(investments)
+          .where(eq(investments.userId, session.user.id))
+          .orderBy(desc(investments.updatedAt)),
+        db
+          .select()
+          .from(investmentEvents)
+          .where(eq(investmentEvents.userId, session.user.id))
+          .orderBy(desc(investmentEvents.occurredAt)),
+      ])
+    );
 
-    if (user.length > 0 && user[0].currency) {
-      userCurrency = user[0].currency;
+    if (userRows.length > 0 && userRows[0].currency) {
+      userCurrency = userRows[0].currency;
     }
-
-    const items = await db
-      .select()
-      .from(investments)
-      .where(eq(investments.userId, session.user.id))
-      .orderBy(desc(investments.updatedAt));
-
-    const events = await db
-      .select()
-      .from(investmentEvents)
-      .where(eq(investmentEvents.userId, session.user.id))
-      .orderBy(desc(investmentEvents.occurredAt));
 
     userInvestments = items.map((inv) => ({
       ...inv,
@@ -58,4 +61,3 @@ export default async function InvestPage() {
     </AppShell>
   );
 }
-

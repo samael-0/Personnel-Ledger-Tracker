@@ -13,14 +13,15 @@ export type CurrencyCode = (typeof SUPPORTED_CURRENCIES)[number]["code"];
 
 export function getCurrencyMeta(code: string) {
   const found = SUPPORTED_CURRENCIES.find((c) => c.code === code.toUpperCase());
-  return (
-    found || {
-      code: code.toUpperCase(),
-      symbol: code.toUpperCase() + " ",
-      name: code.toUpperCase(),
-      decimals: 2,
-    }
-  );
+  return {
+    code: found ? found.code : code.toUpperCase(),
+    symbol: found ? found.symbol : code.toUpperCase() + " ",
+    name: found ? found.name : code.toUpperCase(),
+    decimals:
+      found && "decimals" in found && (found as any).decimals !== undefined
+        ? (found as any).decimals
+        : 2,
+  };
 }
 
 /**
@@ -35,7 +36,8 @@ export function formatMoney(
   const meta = getCurrencyMeta(currencyCode);
   const decimals = "decimals" in meta && meta.decimals !== undefined ? meta.decimals : 2;
   const isNegative = amountMinor < 0;
-  const absAmount = Math.abs(amountMinor);
+  // Ensure integer minor units to avoid float precision issues
+  const absAmount = Math.round(Math.abs(amountMinor));
 
   let formattedNumber = "";
   if (decimals === 0) {
@@ -59,11 +61,16 @@ export function parseToMinorUnits(
   input: string | number,
   currencyCode = "USD"
 ): number {
-  if (typeof input === "number") {
-    return Math.round(input * 100);
-  }
   const meta = getCurrencyMeta(currencyCode);
   const decimals = "decimals" in meta && meta.decimals !== undefined ? meta.decimals : 2;
+
+  if (typeof input === "number") {
+    if (decimals === 0) {
+      return Math.round(input);
+    }
+    return Math.round(input * 100);
+  }
+
   const cleaned = input.replace(/[^0-9.-]/g, "").trim();
   if (!cleaned) return 0;
 
@@ -76,4 +83,3 @@ export function parseToMinorUnits(
 
   return Math.round(parsed * 100);
 }
-

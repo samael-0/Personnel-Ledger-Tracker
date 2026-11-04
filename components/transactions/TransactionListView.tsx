@@ -82,12 +82,62 @@ export function TransactionListView({
     }
   }, [search, typeFilter, categoryFilter, walletFilter]);
 
+  const isFirstMount = React.useRef(true);
+
   React.useEffect(() => {
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
     const timer = setTimeout(() => {
       fetchTransactions();
     }, 250);
     return () => clearTimeout(timer);
   }, [fetchTransactions]);
+
+  const handleOptimisticSaved = React.useCallback(
+    (optimisticTx?: any, action?: "add" | "edit" | "delete") => {
+      if (!optimisticTx) {
+        fetchTransactions();
+        return;
+      }
+      if (action === "delete") {
+        setTxs((prev) => prev.filter((t) => t.id !== optimisticTx.id));
+      } else if (action === "edit") {
+        setTxs((prev) =>
+          prev.map((t) =>
+            t.id === optimisticTx.id
+              ? ({
+                  ...t,
+                  ...optimisticTx,
+                  occurredAt: new Date(optimisticTx.occurredAt),
+                } as TransactionRecord)
+              : t
+          )
+        );
+      } else if (action === "add") {
+        const fullItem: TransactionRecord = {
+          id: optimisticTx.id || `temp-${Date.now()}`,
+          userId: "",
+          type: optimisticTx.type,
+          amountMinor: optimisticTx.amountMinor,
+          currency: optimisticTx.currency,
+          categoryId: optimisticTx.categoryId,
+          categoryName: categories.find((c) => c.id === optimisticTx.categoryId)?.name,
+          categoryIcon: categories.find((c) => c.id === optimisticTx.categoryId)?.icon,
+          walletId: optimisticTx.walletId,
+          walletName: wallets.find((w) => w.id === optimisticTx.walletId)?.name,
+          merchant: optimisticTx.merchant,
+          note: optimisticTx.note,
+          occurredAt: new Date(optimisticTx.occurredAt),
+          source: (optimisticTx.source as any) || "manual",
+                  };
+        setTxs((prev) => [fullItem, ...prev]);
+      }
+      fetchTransactions();
+    },
+    [fetchTransactions, categories, wallets]
+  );
 
   // Group transactions by Date string (YYYY-MM-DD)
   const groupedByDay = React.useMemo(() => {
@@ -347,7 +397,7 @@ export function TransactionListView({
           setIsSheetOpen(false);
           setEditingTx(null);
         }}
-        onSaved={fetchTransactions}
+        onSaved={handleOptimisticSaved}
         categories={categories}
         wallets={wallets}
         userCurrency={userCurrency}

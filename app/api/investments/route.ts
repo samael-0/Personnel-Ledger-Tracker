@@ -15,17 +15,18 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const items = await db
-      .select()
-      .from(investments)
-      .where(eq(investments.userId, session.user.id))
-      .orderBy(desc(investments.updatedAt));
-
-    const events = await db
-      .select()
-      .from(investmentEvents)
-      .where(eq(investmentEvents.userId, session.user.id))
-      .orderBy(desc(investmentEvents.occurredAt));
+    const [items, events] = await Promise.all([
+      db
+        .select()
+        .from(investments)
+        .where(eq(investments.userId, session.user.id))
+        .orderBy(desc(investments.updatedAt)),
+      db
+        .select()
+        .from(investmentEvents)
+        .where(eq(investmentEvents.userId, session.user.id))
+        .orderBy(desc(investmentEvents.occurredAt)),
+    ]);
 
     const itemsWithEvents = items.map((inv) => ({
       ...inv,
@@ -165,31 +166,32 @@ export async function PUT(req: NextRequest) {
 
       const now = occurredAt ? new Date(occurredAt) : new Date();
 
-      // Update current valuation
-      await db
-        .update(investments)
-        .set({
-          currentValueMinor: newCurrentValueMinor,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(investments.id, investmentId),
-            eq(investments.userId, session.user.id)
-          )
-        );
-
-      // Record valuation update event
+      // Update current valuation and insert event atomically in transaction
       const eventId = `inve-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      await db.insert(investmentEvents).values({
-        id: eventId,
-        investmentId,
-        userId: session.user.id,
-        eventType: "valuation_update",
-        amountMinor: newCurrentValueMinor,
-        quantity: existing[0].quantity,
-        note: note || "Manual valuation benchmark update",
-        occurredAt: now,
+      await db.transaction(async (tx) => {
+        await tx
+          .update(investments)
+          .set({
+            currentValueMinor: newCurrentValueMinor,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(investments.id, investmentId),
+              eq(investments.userId, session.user.id)
+            )
+          );
+
+        await tx.insert(investmentEvents).values({
+          id: eventId,
+          investmentId,
+          userId: session.user.id,
+          eventType: "valuation_update",
+          amountMinor: newCurrentValueMinor,
+          quantity: existing[0].quantity,
+          note: note || "Manual valuation benchmark update",
+          occurredAt: now,
+        });
       });
 
       return NextResponse.json({ success: true });

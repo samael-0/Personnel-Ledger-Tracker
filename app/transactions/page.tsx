@@ -6,6 +6,7 @@ import { transactions, categories, wallets, users, userHiddenCategories } from "
 import { eq, desc, or, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { DEFAULT_CATEGORIES, DEFAULT_WALLETS } from "@/lib/data/defaults";
+import { timeQuery } from "@/lib/timing";
 
 export default async function TransactionsPage() {
   const session = await requireAuth();
@@ -16,28 +17,70 @@ export default async function TransactionsPage() {
   let userTransactions: any[] = [];
 
   try {
-    const user = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, session.user.id))
-      .limit(1);
-
-    if (user.length > 0 && user[0].currency) {
-      userCurrency = user[0].currency;
-    }
-
     const toWallets = alias(wallets, "to_wallets");
 
-    const hidden = await db
-      .select({ categoryId: userHiddenCategories.categoryId })
-      .from(userHiddenCategories)
-      .where(eq(userHiddenCategories.userId, session.user.id));
-    const hiddenSet = new Set(hidden.map((h) => h.categoryId));
+    const [userRows, hidden, fetchedCats, fetchedWallets, fetchedTxs] = await timeQuery(
+      "TransactionsPage:parallel-load",
+      () =>
+        Promise.all([
+          db
+            .select({ currency: users.currency })
+            .from(users)
+            .where(eq(users.id, session.user.id))
+            .limit(1),
+          db
+            .select({ categoryId: userHiddenCategories.categoryId })
+            .from(userHiddenCategories)
+            .where(eq(userHiddenCategories.userId, session.user.id)),
+          db
+            .select()
+            .from(categories)
+            .where(
+              or(eq(categories.userId, session.user.id), isNull(categories.userId))
+            ),
+          db
+            .select()
+            .from(wallets)
+            .where(eq(wallets.userId, session.user.id))
+            .orderBy(wallets.sortOrder, wallets.createdAt),
+          db
+            .select({
+              id: transactions.id,
+              userId: transactions.userId,
+              type: transactions.type,
+              amountMinor: transactions.amountMinor,
+              currency: transactions.currency,
+              categoryId: transactions.categoryId,
+              categoryName: categories.name,
+              categoryIcon: categories.icon,
+              walletId: transactions.walletId,
+              walletName: wallets.name,
+              toWalletId: transactions.toWalletId,
+              toWalletName: toWallets.name,
+              toAmountMinor: transactions.toAmountMinor,
+              transferFeeMinor: transactions.transferFeeMinor,
+              merchant: transactions.merchant,
+              note: transactions.note,
+              occurredAt: transactions.occurredAt,
+              source: transactions.source,
+              receiptId: transactions.receiptId,
+              createdAt: transactions.createdAt,
+            })
+            .from(transactions)
+            .leftJoin(categories, eq(transactions.categoryId, categories.id))
+            .leftJoin(wallets, eq(transactions.walletId, wallets.id))
+            .leftJoin(toWallets, eq(transactions.toWalletId, toWallets.id))
+            .where(eq(transactions.userId, session.user.id))
+            .orderBy(desc(transactions.occurredAt))
+            .limit(100),
+        ])
+    );
 
-    const fetchedCats = await db
-      .select()
-      .from(categories)
-      .where(or(eq(categories.userId, session.user.id), isNull(categories.userId)));
+    if (userRows.length > 0 && userRows[0].currency) {
+      userCurrency = userRows[0].currency;
+    }
+
+    const hiddenSet = new Set(hidden.map((h) => h.categoryId));
 
     if (fetchedCats.length > 0) {
       userCategories = fetchedCats
@@ -50,12 +93,6 @@ export default async function TransactionsPage() {
           isArchived: c.isArchived,
         }));
     }
-
-    const fetchedWallets = await db
-      .select()
-      .from(wallets)
-      .where(eq(wallets.userId, session.user.id))
-      .orderBy(wallets.sortOrder, wallets.createdAt);
 
     if (fetchedWallets.length > 0) {
       userWallets = fetchedWallets.map((w) => ({
@@ -77,38 +114,9 @@ export default async function TransactionsPage() {
       }));
     }
 
-    userTransactions = await db
-      .select({
-        id: transactions.id,
-        userId: transactions.userId,
-        type: transactions.type,
-        amountMinor: transactions.amountMinor,
-        currency: transactions.currency,
-        categoryId: transactions.categoryId,
-        categoryName: categories.name,
-        categoryIcon: categories.icon,
-        walletId: transactions.walletId,
-        walletName: wallets.name,
-        toWalletId: transactions.toWalletId,
-        toWalletName: toWallets.name,
-        toAmountMinor: transactions.toAmountMinor,
-        transferFeeMinor: transactions.transferFeeMinor,
-        merchant: transactions.merchant,
-        note: transactions.note,
-        occurredAt: transactions.occurredAt,
-        source: transactions.source,
-        receiptId: transactions.receiptId,
-        createdAt: transactions.createdAt,
-      })
-      .from(transactions)
-      .leftJoin(categories, eq(transactions.categoryId, categories.id))
-      .leftJoin(wallets, eq(transactions.walletId, wallets.id))
-      .leftJoin(toWallets, eq(transactions.toWalletId, toWallets.id))
-      .where(eq(transactions.userId, session.user.id))
-      .orderBy(desc(transactions.occurredAt))
-      .limit(100);
-  } catch (e) {
-    console.warn("Could not query DB during transactions render, falling back:", e);
+    userTransactions = fetchedTxs;
+  } catch (err) {
+    console.error("Transactions page load error:", err);
   }
 
   return (
@@ -129,4 +137,3 @@ export default async function TransactionsPage() {
     </AppShell>
   );
 }
-

@@ -1,6 +1,6 @@
-import jsQR from "jsqr";
-
 export async function decodeQrFromImage(file: File): Promise<string | null> {
+  const { default: jsQR } = await import("jsqr");
+
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
@@ -52,4 +52,3 @@ export async function decodeQrFromImage(file: File): Promise<string | null> {
     img.src = url;
   });
 }
-

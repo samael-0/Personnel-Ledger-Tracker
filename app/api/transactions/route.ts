@@ -5,6 +5,7 @@ import { transactions, categories, wallets } from "@/db/schema";
 import { eq, and, desc, gte, lte, ilike, or, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { transactionSchema } from "@/lib/validations/transactions";
+import { DEFAULT_CATEGORIES } from "@/lib/data/defaults";
 
 const toWallets = alias(wallets, "to_wallets");
 
@@ -179,7 +180,7 @@ export async function POST(req: NextRequest) {
     } else {
       // For income or expense, verify category belongs to user or is shared default
       if (categoryId) {
-        const [cat] = await db
+        let [cat] = await db
           .select()
           .from(categories)
           .where(
@@ -188,6 +189,33 @@ export async function POST(req: NextRequest) {
               or(eq(categories.userId, session.user.id), isNull(categories.userId))
             )
           );
+
+        if (!cat) {
+          const defaultCat = DEFAULT_CATEGORIES.find((c) => c.id === categoryId);
+          if (defaultCat) {
+            try {
+              await db
+                .insert(categories)
+                .values({
+                  id: defaultCat.id,
+                  userId: null,
+                  name: defaultCat.name,
+                  kind: defaultCat.kind,
+                  icon: defaultCat.icon,
+                  isArchived: false,
+                  createdAt: new Date(),
+                })
+                .onConflictDoNothing();
+
+              [cat] = await db
+                .select()
+                .from(categories)
+                .where(eq(categories.id, categoryId));
+            } catch (seedErr) {
+              console.warn("Auto-seed category error:", seedErr);
+            }
+          }
+        }
 
         if (!cat) {
           return NextResponse.json(
