@@ -11,8 +11,6 @@ import {
   type TransactionItem,
 } from "@/components/transactions/TransactionSheet";
 import { formatMoney } from "@/lib/money";
-import { DashboardBarChart } from "@/components/dashboard/DashboardBarChart";
-import type { ChartPeriodBucket } from "@/lib/data/chart-data";
 
 interface DashboardViewProps {
   user: {
@@ -40,7 +38,6 @@ interface DashboardViewProps {
   }>;
   categories: Category[];
   wallets: Wallet[];
-  initialChartData?: ChartPeriodBucket[];
 }
 
 export function DashboardView({
@@ -48,7 +45,6 @@ export function DashboardView({
   transactions: initialTxs,
   categories,
   wallets: initialWallets,
-  initialChartData = [],
 }: DashboardViewProps) {
   const [txs, setTxs] = React.useState(initialTxs);
   const [wallets, setWallets] = React.useState<Wallet[]>(initialWallets);
@@ -321,12 +317,85 @@ export function DashboardView({
         )}
       </div>
 
-      {/* 4. REAL SQL-AGGREGATED INFLOW VS EXPENSE BAR CHART */}
-      <DashboardBarChart
-        initialData={initialChartData}
-        userCurrency={user.currency}
-        selectedAccountFilter={selectedAccountFilter}
-      />
+      {/* 4. PERFORMANCE AREA CHART WITH MONTH TOTALS & FILTER */}
+      <div className="bg-surface rounded-card border-2 border-border shadow-neo p-4 sm:p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b-2 border-border pb-3">
+          <div>
+            <span className="text-xs font-black text-ink block">
+              Monthly Inflow & Expense
+            </span>
+            <span className="text-[11px] font-bold text-muted">
+              {selectedAccountFilter === "all"
+                ? "Across all active accounts"
+                : `Filtered by: ${wallets.find((w) => w.id === selectedAccountFilter)?.name || "Account"}`}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-extrabold text-muted">Filter:</span>
+            <select
+              value={selectedAccountFilter}
+              onChange={(e) => setSelectedAccountFilter(e.target.value)}
+              className="text-xs font-bold bg-surface-subtle border-2 border-border rounded-control px-2.5 py-1 text-ink shadow-neo-sm"
+            >
+              <option value="all">All Accounts</option>
+              {wallets.filter((w) => !w.isArchived).map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} ({w.currency})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Figures block */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="p-3 rounded-btn bg-emerald-50 dark:bg-emerald-950/40 border-2 border-border">
+            <span className="text-[10px] font-extrabold text-muted uppercase block">
+              Month Income
+            </span>
+            <span className="text-base sm:text-lg font-black font-mono text-emerald-600 dark:text-emerald-400">
+              +{formatMoney(monthIncomeMinor, user.currency)}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-btn bg-rose-50 dark:bg-rose-950/40 border-2 border-border">
+            <span className="text-[10px] font-extrabold text-muted uppercase block">
+              Month Expense
+            </span>
+            <span className="text-base sm:text-lg font-black font-mono text-rose-600 dark:text-rose-400">
+              -{formatMoney(monthExpenseMinor, user.currency)}
+            </span>
+          </div>
+        </div>
+
+        {/* Performance Curve SVG */}
+        <div className="w-full h-32 pt-2">
+          <svg viewBox="0 0 400 120" className="w-full h-full overflow-visible">
+            <defs>
+              <linearGradient id="curveGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#22C55E" stopOpacity="0.35" />
+                <stop offset="100%" stopColor="#22C55E" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+            <line x1="0" y1="20" x2="400" y2="20" stroke="currentColor" className="text-border/20" strokeDasharray="3 3" />
+            <line x1="0" y1="60" x2="400" y2="60" stroke="currentColor" className="text-border/20" strokeDasharray="3 3" />
+            <line x1="0" y1="100" x2="400" y2="100" stroke="currentColor" className="text-border/20" strokeDasharray="3 3" />
+            <path
+              d="M 0 90 Q 50 110, 100 50 T 200 70 T 300 40 T 400 30 L 400 120 L 0 120 Z"
+              fill="url(#curveGradient)"
+            />
+            <path
+              d="M 0 90 Q 50 110, 100 50 T 200 70 T 300 40 T 400 30"
+              fill="none"
+              stroke="#22C55E"
+              strokeWidth="3.5"
+              strokeLinecap="round"
+            />
+            <circle cx="300" cy="40" r="5" fill="#22C55E" stroke="#FFFFFF" strokeWidth="2" />
+          </svg>
+        </div>
+      </div>
 
       {/* 5. RECENT TRANSACTIONS */}
       <div className="space-y-3">

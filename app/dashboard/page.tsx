@@ -6,8 +6,6 @@ import { transactions, categories, wallets, users } from "@/db/schema";
 import { eq, desc, or, isNull } from "drizzle-orm";
 import { DEFAULT_CATEGORIES, DEFAULT_WALLETS } from "@/lib/data/defaults";
 import { getAccountsWithBalances } from "@/lib/data/accounts";
-import { getDashboardChartData, type ChartPeriodBucket } from "@/lib/data/chart-data";
-import { timeQuery } from "@/lib/timing";
 
 export default async function DashboardPage() {
   const session = await requireAuth();
@@ -16,64 +14,28 @@ export default async function DashboardPage() {
   let userCategories: any[] = DEFAULT_CATEGORIES;
   let userWallets: any[] = [];
   let userTransactions: any[] = [];
-  let initialChartData: ChartPeriodBucket[] = [];
 
   try {
-    const [userRows, fetchedCats, accountsData, fetchedTxs, chartData] =
-      await timeQuery("DashboardPage:parallel-load", () =>
-        Promise.all([
-          db
-            .select({ currency: users.currency })
-            .from(users)
-            .where(eq(users.id, session.user.id))
-            .limit(1),
-          db
-            .select()
-            .from(categories)
-            .where(
-              or(
-                eq(categories.userId, session.user.id),
-                isNull(categories.userId)
-              )
-            ),
-          getAccountsWithBalances(session.user.id, false),
-          db
-            .select({
-              id: transactions.id,
-              userId: transactions.userId,
-              type: transactions.type,
-              amountMinor: transactions.amountMinor,
-              currency: transactions.currency,
-              categoryId: transactions.categoryId,
-              categoryName: categories.name,
-              walletId: transactions.walletId,
-              walletName: wallets.name,
-              merchant: transactions.merchant,
-              note: transactions.note,
-              occurredAt: transactions.occurredAt,
-              source: transactions.source,
-            })
-            .from(transactions)
-            .leftJoin(categories, eq(transactions.categoryId, categories.id))
-            .leftJoin(wallets, eq(transactions.walletId, wallets.id))
-            .where(eq(transactions.userId, session.user.id))
-            .orderBy(desc(transactions.occurredAt))
-            .limit(50),
-          getDashboardChartData(session.user.id, {
-            window: "6m",
-            walletId: "all",
-          }),
-        ])
-      );
+    const user = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, session.user.id))
+      .limit(1);
 
-    if (userRows.length > 0 && userRows[0].currency) {
-      userCurrency = userRows[0].currency;
+    if (user.length > 0 && user[0].currency) {
+      userCurrency = user[0].currency;
     }
+
+    const fetchedCats = await db
+      .select()
+      .from(categories)
+      .where(or(eq(categories.userId, session.user.id), isNull(categories.userId)));
 
     if (fetchedCats.length > 0) {
       userCategories = fetchedCats;
     }
 
+    const accountsData = await getAccountsWithBalances(session.user.id, false);
     if (accountsData.accounts.length > 0) {
       userWallets = accountsData.accounts;
     } else {
@@ -88,8 +50,28 @@ export default async function DashboardPage() {
       }));
     }
 
-    userTransactions = fetchedTxs;
-    initialChartData = chartData;
+    userTransactions = await db
+      .select({
+        id: transactions.id,
+        userId: transactions.userId,
+        type: transactions.type,
+        amountMinor: transactions.amountMinor,
+        currency: transactions.currency,
+        categoryId: transactions.categoryId,
+        categoryName: categories.name,
+        walletId: transactions.walletId,
+        walletName: wallets.name,
+        merchant: transactions.merchant,
+        note: transactions.note,
+        occurredAt: transactions.occurredAt,
+        source: transactions.source,
+      })
+      .from(transactions)
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(wallets, eq(transactions.walletId, wallets.id))
+      .where(eq(transactions.userId, session.user.id))
+      .orderBy(desc(transactions.occurredAt))
+      .limit(50);
   } catch (e) {
     console.warn("DB query skipped/fallback in dashboard:", e);
   }
@@ -111,8 +93,8 @@ export default async function DashboardPage() {
         transactions={userTransactions}
         categories={userCategories}
         wallets={userWallets}
-        initialChartData={initialChartData}
       />
     </AppShell>
   );
 }
+
